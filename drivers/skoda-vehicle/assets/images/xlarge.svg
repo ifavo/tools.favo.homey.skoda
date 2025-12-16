@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" 
+     viewBox="0 0 512 512" style="enable-background:new 0 0 512 512;" xml:space="preserve">
+<g>
+  <!-- Car body -->
+  <path d="M80,192h352c8.8,0,16,7.2,16,16v96c0,8.8-7.2,16-16,16H80c-8.8,0-16-7.2-16-16V208C64,199.2,71.2,192,80,192z" fill="#2a73ff"/>
+  <path d="M96,176h320c8.8,0,16,7.2,16,16v32c0,8.8-7.2,16-16,16H96c-8.8,0-16-7.2-16-16V192C80,183.2,87.2,176,96,176z" fill="#1a5fef"/>
+  
+  <!-- Windows -->
+  <rect x="128" y="192" width="96" height="64" fill="#e3f2fd" opacity="0.8"/>
+  <rect x="288" y="192" width="96" height="64" fill="#e3f2fd" opacity="0.8"/>
+  
+  <!-- Wheels -->
+  <circle cx="128" cy="320" r="32" fill="#333"/>
+  <circle cx="128" cy="320" r="20" fill="#666"/>
+  <circle cx="384" cy="320" r="32" fill="#333"/>
+  <circle cx="384" cy="320" r="20" fill="#666"/>
+  
+  <!-- Headlights -->
+  <circle cx="432" cy="208" r="16" fill="#fff9c4"/>
+  <circle cx="432" cy="240" r="12" fill="#ffeb3b"/>
+  
+  <!-- Grille -->
+  <rect x="416" y="192" width="8" height="32" fill="#1a5fef"/>
+  <rect x="432" y="192" width="8" height="32" fill="#1a5fef"/>
+  <rect x="448" y="192" width="8" height="32" fill="#1a5fef"/>
+</g>
+</svg>

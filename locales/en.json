@@ -1,0 +1,83 @@
+{
+  "drivers": {
+    "skoda-vehicle": {
+      "name": {
+        "en": "Skoda Vehicle"
+      },
+      "pair": {
+        "list_vehicles": {
+          "title": {
+            "en": "Select your vehicle"
+          }
+        }
+      }
+    }
+  },
+  "capabilities": {
+    "locked": {
+      "name": {
+        "en": "Vehicle Locked"
+      }
+    },
+    "measure_battery": {
+      "name": {
+        "en": "Battery Level"
+      }
+    },
+    "measure_range": {
+      "name": {
+        "en": "Remaining Range"
+      }
+    },
+    "measure_charging_power": {
+      "name": {
+        "en": "Charging Power"
+      }
+    },
+    "measure_charging_rate": {
+      "name": {
+        "en": "Charging Rate"
+      }
+    },
+    "measure_charging_time": {
+      "name": {
+        "en": "Time to Full Charge"
+      }
+    },
+    "measure_soc": {
+      "name": {
+        "en": "State of Charge"
+      }
+    },
+    "onoff.charging": {
+      "name": {
+        "en": "Charging"
+      }
+    },
+    "alarm_contact.door": {
+      "name": {
+        "en": "Door Contact"
+      }
+    },
+    "alarm_contact.trunk": {
+      "name": {
+        "en": "Trunk Contact"
+      }
+    },
+    "alarm_contact.bonnet": {
+      "name": {
+        "en": "Bonnet Contact"
+      }
+    },
+    "alarm_contact.window": {
+      "name": {
+        "en": "Window Contact"
+      }
+    },
+    "alarm_contact.light": {
+      "name": {
+        "en": "Light Contact"
+      }
+    }
+  }
+}

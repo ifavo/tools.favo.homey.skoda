@@ -1,0 +1,157 @@
+{
+  "id": "skoda-vehicle",
+  "name": {
+    "en": "Skoda Vehicle"
+  },
+  "class": "other",
+  "capabilities": [
+    "locked",
+    "measure_battery",
+    "measure_distance",
+    "measure_power",
+    "onoff",
+    "alarm_contact.door",
+    "alarm_contact.trunk",
+    "alarm_contact.bonnet",
+    "alarm_contact.window",
+    "alarm_contact.light"
+  ],
+  "capabilitiesOptions": {
+    "locked": {
+      "title": {
+        "en": "Vehicle Locked"
+      }
+    },
+    "measure_battery": {
+      "title": {
+        "en": "Battery Level"
+      },
+      "units": {
+        "en": "%"
+      }
+    },
+    "measure_distance": {
+      "title": {
+        "en": "Remaining Range"
+      },
+      "units": {
+        "en": "km"
+      }
+    },
+    "measure_power": {
+      "title": {
+        "en": "Charging Power"
+      },
+      "units": {
+        "en": "kW"
+      }
+    },
+    "onoff": {
+      "title": {
+        "en": "Charging"
+      }
+    },
+    "alarm_contact.door": {
+      "title": {
+        "en": "Door Contact"
+      }
+    },
+    "alarm_contact.trunk": {
+      "title": {
+        "en": "Trunk Contact"
+      }
+    },
+    "alarm_contact.bonnet": {
+      "title": {
+        "en": "Bonnet Contact"
+      }
+    },
+    "alarm_contact.window": {
+      "title": {
+        "en": "Window Contact"
+      }
+    },
+    "alarm_contact.light": {
+      "title": {
+        "en": "Light Contact"
+      }
+    }
+  },
+  "images": {
+    "small": "/drivers/skoda-vehicle/assets/images/small.png",
+    "large": "/drivers/skoda-vehicle/assets/images/large.png",
+    "xlarge": "/drivers/skoda-vehicle/assets/images/xlarge.png"
+  },
+  "settings": [
+    {
+      "id": "vin",
+      "type": "text",
+      "label": {
+        "en": "Vehicle Identification Number (VIN)"
+      },
+      "value": ""
+    },
+    {
+      "id": "low_battery_threshold",
+      "type": "number",
+      "label": {
+        "en": "Low Battery Threshold (%)"
+      },
+      "value": 40,
+      "hint": {
+        "en": "Battery percentage below which the charging device will be turned on"
+      }
+    },
+    {
+      "id": "enable_low_price_charging",
+      "type": "checkbox",
+      "label": {
+        "en": "Enable Low Price Charging"
+      },
+      "value": false,
+      "hint": {
+        "en": "Automatically charge during cheapest electricity price hours"
+      }
+    },
+    {
+      "id": "low_price_hours_count",
+      "type": "number",
+      "label": {
+        "en": "Number of Cheapest Hours"
+      },
+      "value": 2,
+      "hint": {
+        "en": "Number of cheapest hours per day to charge (default: 2)"
+      }
+    },
+        {
+          "id": "price_timezone",
+          "type": "text",
+          "label": {
+            "en": "Timezone"
+          },
+          "value": "",
+          "hint": {
+            "en": "Timezone for price time formatting (e.g., Europe/Berlin). Leave empty to auto-detect from Homey settings."
+          }
+        },
+    {
+      "id": "next_charging_times",
+      "type": "text",
+      "label": {
+        "en": "Next Charging Times"
+      },
+      "value": "",
+      "visible": true,
+      "hint": {
+        "en": "Next scheduled charging times (automatically updated)"
+      }
+    }
+  ],
+  "pair": [
+    {
+      "id": "list_devices"
+    }
+  ]
+}
+

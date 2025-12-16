@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Select Vehicle</title>
+  <style>
+    ul { list-style: none; padding-left: 0; }
+    li { padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin: 6px 0; cursor: pointer; }
+    li:hover { border-color: #2a73ff; }
+  </style>
+</head>
+<body>
+  <div class="homey-form">
+    <div class="homey-form-group">
+      <label class="homey-form-label">Select your Skoda vehicle</label>
+      <p class="homey-form-help" id="status">Loading vehicles…</p>
+      <ul id="device-list"></ul>
+    </div>
+  </div>
+  <script>
+    function render(devices) {
+      const status = document.getElementById('status');
+      const list = document.getElementById('device-list');
+      list.innerHTML = '';
+      if (!devices || devices.length === 0) {
+        status.textContent = 'No vehicles found. Check your refresh token and account.';
+        return;
+      }
+      status.textContent = `Found ${devices.length} vehicle(s). Tap to add.`;
+      devices.forEach((d) => {
+        const li = document.createElement('li');
+        li.textContent = `${d.name} (${d.data.id})`;
+        li.onclick = () => {
+          Homey.addDevice(d, function(err) {
+            if (err) {
+              status.textContent = 'Failed to add device: ' + err.message;
+            } else {
+              status.textContent = 'Device added. You can close this view.';
+              Homey.nextView();
+            }
+          });
+        };
+        list.appendChild(li);
+      });
+    }
+
+    function loadDevices() {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading vehicles…';
+      Homey.emit('list_devices', null, function(err, devices) {
+        if (err) {
+          status.textContent = 'Error loading vehicles: ' + err.message;
+          return;
+        }
+        render(devices);
+      });
+    }
+
+    // Homey is injected by the pairing environment; no extra scripts needed
+    const checkHomey = setInterval(() => {
+      if (typeof Homey !== 'undefined') {
+        clearInterval(checkHomey);
+        loadDevices();
+        if (Homey.ready) Homey.ready();
+      }
+    }, 100);
+  </script>
+</body>
+</html>

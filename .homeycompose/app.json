@@ -1,0 +1,49 @@
+{
+  "id": "tools.favo.homey.skoda",
+  "version": "1.0.0",
+  "compatibility": ">=12.4.0",
+  "sdk": 3,
+  "platforms": [
+    "local"
+  ],
+  "name": {
+    "en": "Skoda"
+  },
+  "description": {
+    "en": "Adds support for Skoda vehicles via MySkoda Connect API."
+  },
+  "category": [
+    "tools"
+  ],
+  "permissions": [],
+  "images": {
+    "small": "/assets/images/small.png",
+    "large": "/assets/images/large.png",
+    "xlarge": "/assets/images/xlarge.png"
+  },
+  "author": {
+    "name": "favo",
+    "email": "tools@favo.org"
+  },
+  "settings": [
+    {
+      "id": "refresh_token",
+      "type": "text",
+      "title": {
+        "en": "Refresh Token"
+      },
+      "value": "",
+      "hint": {
+        "en": "Enter your Skoda Connect refresh token"
+      }
+    }
+  ],
+  "drivers": [
+    {
+      "id": "skoda-vehicle",
+      "name": {
+        "en": "Skoda Vehicle"
+      }
+    }
+  ]
+}
