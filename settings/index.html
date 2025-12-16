@@ -49,44 +49,6 @@
       color: #1565c0;
       border: 1px solid #2196f3;
     }
-    /* Simple, elegant button styling */
-    .homey-button,
-    .homey-button-primary {
-      padding: 10px 20px;
-      border: 1px solid #ddd;
-      background: #fff;
-      color: #333;
-      font-size: 14px;
-      font-weight: 400;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      text-decoration: none;
-      display: inline-block;
-    }
-    .homey-button:hover,
-    .homey-button-primary:hover {
-      background: #f8f8f8;
-      border-color: #bbb;
-    }
-    .homey-button:active,
-    .homey-button-primary:active {
-      background: #f0f0f0;
-    }
-    .homey-button:disabled,
-    .homey-button-primary:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .homey-button-primary {
-      background: #333;
-      color: #fff;
-      border-color: #333;
-    }
-    .homey-button-primary:hover {
-      background: #444;
-      border-color: #444;
-    }
   </style>
 </head>
 <body>
@@ -106,7 +68,7 @@
       />
       <p class="homey-form-help">Enter your Skoda Connect refresh token to authenticate with the API.</p>
       
-      <button type="button" class="homey-button test-button" id="test-token">Test Token</button>
+      <button type="button" class="homey-button-secondary homey-button-small test-button" id="test-token">Test Token</button>
       <div id="test-status" class="status-message"></div>
     </div>
     
@@ -116,7 +78,7 @@
       <p class="homey-form-help">This is the current access token obtained from your refresh token. It will be automatically refreshed when needed.</p>
     </div>
     
-    <button class="homey-button-primary" type="submit">Save</button>
+    <button class="homey-button-primary homey-button-full" type="submit">Save</button>
   </form>
 
   <script>
