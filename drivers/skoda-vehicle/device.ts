@@ -76,6 +76,7 @@ class SkodaVehicleDevice extends Homey.Device {
   private readonly POLL_INTERVAL = 60000; // 60 seconds
   private readonly PRICE_UPDATE_INTERVAL = 15 * 60 * 1000; // 15 minutes
   private readonly INFO_UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours (once per day)
+  private readonly MANUAL_OVERRIDE_DURATION = 60 * 60 * 1000; // 1 hour in milliseconds
   private lowBatteryDeviceEnabled = false; // Track if device was enabled due to low battery
   private lowPriceDeviceEnabled = false; // Track if device was enabled due to low price
 
@@ -224,10 +225,18 @@ class SkodaVehicleDevice extends Homey.Device {
       await this.setCapabilityValue('measure_power', chargingPower).catch(this.error);
 
       // Charging state (on/off)
+      // Only update from API if manual override is not active
       const isCharging = charging.status.state === 'CHARGING' || 
                         charging.status.state === 'CHARGING_AC' ||
                         charging.status.state === 'CHARGING_DC';
-      await this.setCapabilityValue('onoff', isCharging).catch(this.error);
+      
+      if (!this.isManualOverrideActive()) {
+        await this.setCapabilityValue('onoff', isCharging).catch(this.error);
+        this.log(`[ONOFF] Updated from API: ${isCharging ? 'ON' : 'OFF'} (charging state: ${charging.status.state})`);
+      } else {
+        const currentOnOff = this.getCapabilityValue('onoff');
+        this.log(`[ONOFF] Skipping API update (manual override active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+      }
 
       // Ensure VIN is stored in both store and settings
       if (vin) {
@@ -526,6 +535,12 @@ class SkodaVehicleDevice extends Homey.Device {
         return;
       }
 
+      // Check if manual override is still active
+      if (this.isManualOverrideActive()) {
+        this.log('[LOW_PRICE] Skipping automation - manual override still active');
+        return;
+      }
+
       if (isCheapNow) {
         this.log('[LOW_PRICE] Current time is in cheapest period, turning ON self onoff');
         await this.turnOnChargingSelf(false);
@@ -556,11 +571,46 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
+   * Check if manual control override is still active (within 1 hour)
+   */
+  private isManualOverrideActive(): boolean {
+    try {
+      const manualOverrideTimestamp = this.getSetting('_manual_override_timestamp') as number | undefined;
+      if (!manualOverrideTimestamp) {
+        return false;
+      }
+      const now = Date.now();
+      const timeSinceManual = now - manualOverrideTimestamp;
+      const isActive = timeSinceManual < this.MANUAL_OVERRIDE_DURATION;
+      
+      if (isActive) {
+        const remainingMinutes = Math.ceil((this.MANUAL_OVERRIDE_DURATION - timeSinceManual) / (60 * 1000));
+        this.log(`[ONOFF] Manual override active, ${remainingMinutes} minute(s) remaining`);
+      } else {
+        this.log('[ONOFF] Manual override expired, automation can take control');
+      }
+      
+      return isActive;
+    } catch (error) {
+      this.error('[ONOFF] Error checking manual override:', error);
+      return false;
+    }
+  }
+
+  /**
    * Handle onoff capability change (manual user control)
    * This allows manual control - automatic control happens via checkChargingControl
    */
   async onCapabilityOnOff(value: boolean): Promise<void> {
     this.log(`[ONOFF] Manual control: ${value}`);
+    
+    // Store timestamp of manual control
+    const now = Date.now();
+    await this.setSettings({ 
+      _manual_override_timestamp: now,
+    }).catch(this.error);
+    this.log(`[ONOFF] Manual override set, will remain active for ${this.MANUAL_OVERRIDE_DURATION / (60 * 1000)} minutes`);
+    
     // Clear automatic control flags when user manually controls
     if (!value) {
       this.lowBatteryDeviceEnabled = false;
@@ -577,8 +627,15 @@ class SkodaVehicleDevice extends Homey.Device {
   /**
    * Check battery level and control charging (self on/off) if configured
    * Low battery takes priority over low price charging
+   * Respects manual override (1 hour after manual control)
    */
   async checkChargingControl(batteryLevel: number): Promise<void> {
+    // Check if manual override is still active
+    if (this.isManualOverrideActive()) {
+      this.log('[CHARGING_CONTROL] Skipping automation - manual override still active');
+      return;
+    }
+
     const threshold = this.getSetting('low_battery_threshold') as number;
 
     // Check low battery first (takes priority)
@@ -616,10 +673,19 @@ class SkodaVehicleDevice extends Homey.Device {
         return;
       }
 
+      // Check if manual override is still active
+      // Note: Low battery control still respects manual override, but low battery takes priority
+      // So we only check override when battery is above threshold (turning off)
+      if (batteryLevel >= threshold && this.isManualOverrideActive()) {
+        this.log('[LOW_BATTERY] Skipping turn-off - manual override still active');
+        return;
+      }
+
       this.log(`[LOW_BATTERY] Checking battery: ${batteryLevel}% (threshold: ${threshold}%)`);
 
       // Check if battery is below threshold
       if (batteryLevel < threshold) {
+        // Low battery takes priority - turn on even if manual override is active
         // Turn device ON if not already enabled due to low battery
         if (!this.lowBatteryDeviceEnabled) {
           this.log(`[LOW_BATTERY] Battery below threshold (${batteryLevel}% < ${threshold}%), turning ON self onoff`);
@@ -630,7 +696,7 @@ class SkodaVehicleDevice extends Homey.Device {
       } else {
         // Battery is above threshold
         if (this.lowBatteryDeviceEnabled) {
-          // Turn off if it was enabled due to low battery
+          // Turn off if it was enabled due to low battery (but respect manual override)
           this.log(`[LOW_BATTERY] Battery above threshold (${batteryLevel}% >= ${threshold}%), turning OFF self onoff`);
           await this.turnOffChargingSelf();
         }
@@ -643,9 +709,16 @@ class SkodaVehicleDevice extends Homey.Device {
   /**
    * Check low price charging and control device accordingly
    * This uses cached prices (doesn't fetch from API - that's done by the 15-minute interval)
+   * Respects manual override (1 hour after manual control)
    */
   async checkLowPriceCharging(): Promise<void> {
     try {
+      // Check if manual override is still active
+      if (this.isManualOverrideActive()) {
+        this.log('[LOW_PRICE] Skipping automation - manual override still active');
+        return;
+      }
+
       const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
       // Auto-detect timezone if not configured, fallback to Homey's timezone
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
