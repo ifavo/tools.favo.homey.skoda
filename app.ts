@@ -401,6 +401,47 @@ module.exports = class SkodaApp extends Homey.App {
   }
 
   /**
+   * Central function to execute API calls with automatic 401/403 recovery
+   * @param apiCall Function that performs the API call and returns a Promise
+   * @param context Context string for logging (e.g., 'listVehicles', 'getVehicleInfo')
+   * @returns The result of the API call
+   */
+  async executeWithAuthRecovery<T>(
+    apiCall: (accessToken: string) => Promise<T>,
+    context: string = 'API'
+  ): Promise<T> {
+    // Get initial access token
+    let accessToken = await this.getAccessToken();
+    
+    try {
+      // Try the API call
+      return await apiCall(accessToken);
+    } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const statusCode = error.statusCode || 
+        (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
+      
+      // Check if it's a 401/403 error
+      if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
+        this.log(`[${context}] 401/403 error detected, attempting token recovery`);
+        try {
+          // Force refresh token (bypasses rate limit)
+          const newAccessToken = await this.handleAuthError();
+          // Retry the API call with new token (only once to prevent infinite loops)
+          return await apiCall(newAccessToken);
+        } catch (recoveryError) {
+          const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          this.error(`[${context}] Failed to recover from 401/403 error:`, recoveryMessage);
+          throw new Error(`${context} failed: Authentication recovery failed - ${recoveryMessage}`);
+        }
+      } else {
+        // Not an auth error, re-throw original error
+        throw error;
+      }
+    }
+  }
+
+  /**
    * List vehicles from garage
    */
   async listVehicles(accessToken: string): Promise<Array<{ vin: string; name: string }>> {
@@ -437,9 +478,9 @@ module.exports = class SkodaApp extends Homey.App {
   }
 
   /**
-   * Get vehicle info (specification, renders, license plate, etc.) with 401/403 recovery
+   * Get vehicle info (specification, renders, license plate, etc.) with automatic 401/403 recovery
    */
-  async getVehicleInfo(accessToken: string, vin: string, retryOnAuth: boolean = true): Promise<{
+  async getVehicleInfo(accessToken: string, vin: string): Promise<{
     name: string;
     licensePlate?: string;
     compositeRenders?: Array<{
@@ -452,64 +493,53 @@ module.exports = class SkodaApp extends Homey.App {
       modelYear?: string;
     };
   }> {
-    this.log(`[INFO] Fetching vehicle info for VIN: ${vin}`);
-    const url = `${BASE_URL}/api/v2/garage/vehicles/${vin}`;
+    return await this.executeWithAuthRecovery(async (token: string) => {
+      this.log(`[INFO] Fetching vehicle info for VIN: ${vin}`);
+      const url = `${BASE_URL}/api/v2/garage/vehicles/${vin}`;
 
-    this.log(`[INFO] GET ${url}`);
+      this.log(`[INFO] GET ${url}`);
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
-    this.log(`[INFO] Response status: ${response.status}`);
+      this.log(`[INFO] Response status: ${response.status}`);
 
-    if (!response.ok) {
-      const text = await response.text();
-      const status = response.status;
-      
-      // Handle 401/403 by refreshing token and retrying
-      if ((status === 401 || status === 403) && retryOnAuth) {
-        this.log('[INFO] 401/403 error detected, refreshing token and retrying');
-        try {
-          const newAccessToken = await this.handleAuthError();
-          // Retry with new token (don't retry again to prevent infinite loops)
-          return await this.getVehicleInfo(newAccessToken, vin, false);
-        } catch (recoveryError) {
-          const errorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
-          this.error('[INFO] Failed to recover from 401/403:', errorMessage);
-          throw new Error(`Get vehicle info failed ${status}: Authentication recovery failed`);
-        }
+      if (!response.ok) {
+        const text = await response.text();
+        const status = response.status;
+        const error = new Error(`Get vehicle info failed ${status}: ${text}`);
+        (error as any).statusCode = status;
+        throw error;
       }
-      
-      throw new Error(`Get vehicle info failed ${status}: ${text}`);
-    }
 
-    const data = await response.json() as {
-      name?: string;
-      licensePlate?: string;
-      compositeRenders?: Array<{
-        viewType: string;
-        layers: Array<{ url: string; type: string; order: number; viewPoint: string }>;
-      }>;
-      specification?: {
-        model?: string;
-        title?: string;
-        modelYear?: string;
+      const data = await response.json() as {
+        name?: string;
+        licensePlate?: string;
+        compositeRenders?: Array<{
+          viewType: string;
+          layers: Array<{ url: string; type: string; order: number; viewPoint: string }>;
+        }>;
+        specification?: {
+          model?: string;
+          title?: string;
+          modelYear?: string;
+        };
       };
-    };
-    
-    this.log(`[INFO] Vehicle info received: name="${data.name || 'Unnamed'}", licensePlate="${data.licensePlate || 'N/A'}"`);
-    
-    return {
-      name: data.name || '',
-      licensePlate: data.licensePlate,
-      compositeRenders: data.compositeRenders || [],
-      specification: data.specification,
-    };
+      
+      this.log(`[INFO] Vehicle info received: name="${data.name || 'Unnamed'}", licensePlate="${data.licensePlate || 'N/A'}"`);
+      
+      return {
+        name: data.name || '',
+        licensePlate: data.licensePlate,
+        compositeRenders: data.compositeRenders || [],
+        specification: data.specification,
+      };
+    }, 'INFO');
   }
 
 }

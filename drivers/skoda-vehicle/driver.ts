@@ -74,9 +74,26 @@ class SkodaVehicleDriver extends Homey.Driver {
   }
 
   /**
-   * List vehicles from garage with 401/403 recovery
+   * List vehicles from garage with automatic 401/403 recovery
    */
-  async listVehicles(accessToken: string, retryOnAuth: boolean = true): Promise<Vehicle[]> {
+  async listVehicles(accessToken: string): Promise<Vehicle[]> {
+    const app = this.homey.app as any;
+    
+    // Use the app's central auth recovery function if available
+    if (app && typeof app.executeWithAuthRecovery === 'function') {
+      return await app.executeWithAuthRecovery(async (token: string) => {
+        return await this.listVehiclesInternal(token);
+      }, 'PAIR');
+    }
+    
+    // Fallback to direct call if recovery function not available
+    return await this.listVehiclesInternal(accessToken);
+  }
+
+  /**
+   * Internal method to list vehicles (without auth recovery)
+   */
+  private async listVehiclesInternal(accessToken: string): Promise<Vehicle[]> {
     this.log('[PAIR] listVehicles: preparing request to garage API');
     const url =
       `${BASE_URL}/api/v2/garage?connectivityGenerations=MOD1` +
@@ -98,27 +115,9 @@ class SkodaVehicleDriver extends Homey.Driver {
     if (!response.ok) {
       const text = await response.text();
       const status = response.status;
-      
-      // Handle 401/403 by refreshing token and retrying
-      if ((status === 401 || status === 403) && retryOnAuth) {
-        this.log('[PAIR] 401/403 error detected, refreshing token and retrying');
-        try {
-          const app = this.homey.app as any;
-          if (app.handleAuthError) {
-            const newAccessToken = await app.handleAuthError();
-            // Retry with new token (don't retry again to prevent infinite loops)
-            return await this.listVehicles(newAccessToken, false);
-          } else {
-            throw new Error('handleAuthError method not available');
-          }
-        } catch (recoveryError) {
-          const errorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
-          this.error('[PAIR] Failed to recover from 401/403:', errorMessage);
-          throw new Error(`List vehicles failed ${status}: Authentication recovery failed`);
-        }
-      }
-      
-      throw new Error(`List vehicles failed ${status}: ${text}`);
+      const error = new Error(`List vehicles failed ${status}: ${text}`);
+      (error as any).statusCode = status;
+      throw error;
     }
 
     const data = await response.json() as { vehicles?: Vehicle[] };

@@ -446,27 +446,10 @@ class SkodaVehicleDevice extends Homey.Device {
         this.log('VIN not found, attempting to auto-detect...');
         try {
           const app = this.homey.app as any;
-          let vehicles;
-          try {
-            vehicles = await app.listVehicles(accessToken);
-          } catch (listError: any) {
-            // Check if it's a 401/403 error - if so, try to recover
-            const errorMessage = listError instanceof Error ? listError.message : String(listError);
-            const statusCode = listError.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
-            
-            if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
-              this.log('[STATUS] 401/403 error detected in listVehicles, attempting token recovery');
-              if (app && app.handleAuthError) {
-                const newAccessToken = await app.handleAuthError();
-                vehicles = await app.listVehicles(newAccessToken);
-                this.log('[STATUS] Successfully recovered from 401/403 error in listVehicles');
-              } else {
-                throw listError;
-              }
-            } else {
-              throw listError;
-            }
-          }
+          // Use central auth recovery if available
+          const vehicles = await (app && typeof app.executeWithAuthRecovery === 'function'
+            ? app.executeWithAuthRecovery(async (token: string) => app.listVehicles(token), 'STATUS')
+            : app.listVehicles(accessToken));
           
           if (vehicles && vehicles.length > 0) {
             vin = vehicles[0].vin;
@@ -484,38 +467,23 @@ class SkodaVehicleDevice extends Homey.Device {
         }
       }
 
+      // Use central auth recovery for getVehicleStatus
       let status: VehicleStatus;
       try {
-        status = await this.getVehicleStatus(accessToken, vin);
-      } catch (apiError: any) {
-        // Check if it's a 401/403 error - if so, try to recover
-        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-        const statusCode = apiError.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
-        
-        if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
-          this.log('[STATUS] 401/403 error detected, attempting token recovery');
-          try {
-            const app = this.homey.app as any;
-            if (app.handleAuthError) {
-              // Force refresh token (bypasses rate limit)
-              const newAccessToken = await app.handleAuthError();
-              // Retry the API call with new token
-              status = await this.getVehicleStatus(newAccessToken, vin);
-              this.log('[STATUS] Successfully recovered from 401/403 error with new token');
-            } else {
-              this.error('[STATUS] handleAuthError method not available on app');
-              throw apiError; // Re-throw if recovery method not available
-            }
-          } catch (recoveryError) {
-            const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
-            this.error('[STATUS] Failed to recover from 401/403 error:', recoveryMessage);
-            this.setUnavailable(`Auth error: ${recoveryMessage.substring(0, 50)}`).catch(this.error);
-            return; // Exit early
-          }
+        const app = this.homey.app as any;
+        if (app && typeof app.executeWithAuthRecovery === 'function') {
+          status = await app.executeWithAuthRecovery(async (token: string) => {
+            return await this.getVehicleStatus(token, vin);
+          }, 'STATUS');
         } else {
-          // Not an auth error, re-throw
-          throw apiError;
+          // Fallback to direct call if recovery function not available
+          status = await this.getVehicleStatus(accessToken, vin);
         }
+      } catch (apiError) {
+        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+        this.error('[STATUS] Failed to get vehicle status:', errorMessage);
+        this.setUnavailable(`Status error: ${errorMessage.substring(0, 50)}`).catch(this.error);
+        return; // Exit early
       }
 
       await this.updateCapabilities(status);
@@ -694,38 +662,22 @@ class SkodaVehicleDevice extends Homey.Device {
         throw error; // Re-throw - can't proceed without token
       }
       
-      let info: any;
+      // Use central auth recovery for getVehicleInfo
       const app = this.homey.app as any;
+      let info: any;
       try {
-        info = await app.getVehicleInfo(accessToken, vin);
-      } catch (error: any) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const statusCode = error.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
-        
-        // Check if it's a 401/403 error - if so, try to recover
-        if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
-          this.log('[INFO] 401/403 error detected in getVehicleInfo, attempting token recovery');
-          try {
-            if (app && app.handleAuthError) {
-              // Force refresh token (bypasses rate limit)
-              const newAccessToken = await app.handleAuthError();
-              // Retry the API call with new token
-              info = await app.getVehicleInfo(newAccessToken, vin);
-              this.log('[INFO] Successfully recovered from 401/403 error with new token');
-            } else {
-              this.error('[INFO] handleAuthError method not available on app');
-              throw error; // Re-throw if recovery method not available
-            }
-          } catch (recoveryError) {
-            const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
-            this.error('[INFO] Failed to recover from 401/403 error:', recoveryMessage);
-            throw recoveryError; // Re-throw recovery error
-          }
+        if (app && typeof app.executeWithAuthRecovery === 'function') {
+          info = await app.executeWithAuthRecovery(async (token: string) => {
+            return await app.getVehicleInfo(token, vin);
+          }, 'INFO');
         } else {
-          // Not an auth error, re-throw
-          this.error('[INFO] Failed to fetch vehicle info from API:', errorMessage);
-          throw error;
+          // Fallback to direct call if recovery function not available
+          info = await app.getVehicleInfo(accessToken, vin);
         }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[INFO] Failed to fetch vehicle info from API:', errorMessage);
+        throw error; // Re-throw - can't proceed without info
       }
 
       // Store license plate
