@@ -849,6 +849,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
   /**
    * Check if manual control override is still active (within 1 hour)
+   * Only logs expiration once to avoid spam
    */
   private isManualOverrideActive(): boolean {
     try {
@@ -861,10 +862,23 @@ class SkodaVehicleDevice extends Homey.Device {
       const isActive = timeSinceManual < this.MANUAL_OVERRIDE_DURATION;
       
       if (isActive) {
+        // Only log remaining time occasionally (every 5 minutes) to avoid spam
         const remainingMinutes = Math.ceil((this.MANUAL_OVERRIDE_DURATION - timeSinceManual) / (60 * 1000));
-        this.log(`[ONOFF] Manual override active, ${remainingMinutes} minute(s) remaining`);
+        const lastLogTime = this.getSetting('_last_override_log_time') as number | undefined;
+        if (!lastLogTime || (now - lastLogTime) > 5 * 60 * 1000) {
+          this.log(`[ONOFF] Manual override active, ${remainingMinutes} minute(s) remaining`);
+          this.setSettings({ _last_override_log_time: now }).catch(() => {});
+        }
       } else {
-        this.log('[ONOFF] Manual override expired, automation can take control');
+        // Only log expiration once - check if we've already logged it
+        const lastExpirationLog = this.getSetting('_last_expiration_log_time') as number | undefined;
+        const expirationTime = manualOverrideTimestamp + this.MANUAL_OVERRIDE_DURATION;
+        
+        // Only log if we haven't logged this expiration yet, or if it's a new expiration
+        if (!lastExpirationLog || lastExpirationLog < expirationTime) {
+          this.log('[ONOFF] Manual override expired, automation can take control');
+          this.setSettings({ _last_expiration_log_time: now }).catch(() => {});
+        }
       }
       
       return isActive;
@@ -887,6 +901,8 @@ class SkodaVehicleDevice extends Homey.Device {
       try {
         await this.setSettings({ 
           _manual_override_timestamp: now,
+          _last_override_log_time: now, // Reset log time for new override
+          _last_expiration_log_time: 0, // Clear expiration log time so we log when it expires
         });
         this.log(`[ONOFF] Manual override set, will remain active for ${this.MANUAL_OVERRIDE_DURATION / (60 * 1000)} minutes`);
       } catch (error) {
