@@ -23,10 +23,34 @@ module.exports = class SkodaApp extends Homey.App {
    * onInit is called when the app is initialized.
    */
   async onInit() {
-    this.log('SkodaApp has been initialized');
-    
-    // Listen for settings changes
-    this.homey.settings.on('set', this.onSettingsChanged.bind(this));
+    // Set up global error handlers to prevent crashes
+    process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+      const errorMessage = reason instanceof Error ? reason.message : String(reason);
+      this.error('[UNHANDLED] Unhandled promise rejection:', errorMessage);
+      // Don't crash - log and continue
+    });
+
+    process.on('uncaughtException', (error: Error) => {
+      this.error('[UNHANDLED] Uncaught exception:', error.message);
+      // Don't crash - log and continue
+    });
+
+    try {
+      this.log('SkodaApp has been initialized');
+      
+      // Listen for settings changes with error handling
+      try {
+        this.homey.settings.on('set', this.onSettingsChanged.bind(this));
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[INIT] Failed to register settings listener:', errorMessage);
+        // Continue initialization even if listener registration fails
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[INIT] Critical error during app initialization:', errorMessage);
+      // Don't throw - allow app to continue running
+    }
   }
 
   /**
@@ -316,8 +340,17 @@ module.exports = class SkodaApp extends Homey.App {
   /**
    * Get access token, refreshing if needed
    * Respects rate limiting (4 hours between refreshes)
+   * @param forceRefresh If true, bypasses rate limiting (for 401 recovery)
    */
-  async getAccessToken(): Promise<string> {
+  async getAccessToken(forceRefresh: boolean = false): Promise<string> {
+    // If forcing refresh (e.g., after 401 error), clear cache and refresh
+    if (forceRefresh) {
+      this.log('[TOKEN] Force refresh requested, clearing cache');
+      this.accessToken = undefined;
+      this.accessTokenExpiry = undefined;
+      return await this.refreshAccessToken(undefined, true);
+    }
+
     // Check if we have a valid cached token
     if (this.accessToken && this.accessTokenExpiry) {
       const now = Date.now();
@@ -350,6 +383,21 @@ module.exports = class SkodaApp extends Homey.App {
 
     // Refresh the token (will respect rate limiting internally)
     return await this.refreshAccessToken();
+  }
+
+  /**
+   * Handle 401/403 errors by forcing token refresh
+   * Call this when API returns 401/403 to recover from expired tokens
+   * This bypasses rate limiting to ensure we can recover
+   */
+  async handleAuthError(): Promise<string> {
+    this.log('[TOKEN] Authentication error detected (401/403), forcing token refresh');
+    // Clear all cached tokens
+    this.accessToken = undefined;
+    this.accessTokenExpiry = undefined;
+    this.lastTokenRefresh = undefined;
+    // Force refresh (bypass rate limit)
+    return await this.refreshAccessToken(undefined, true);
   }
 
   /**
@@ -389,9 +437,9 @@ module.exports = class SkodaApp extends Homey.App {
   }
 
   /**
-   * Get vehicle info (specification, renders, license plate, etc.)
+   * Get vehicle info (specification, renders, license plate, etc.) with 401/403 recovery
    */
-  async getVehicleInfo(accessToken: string, vin: string): Promise<{
+  async getVehicleInfo(accessToken: string, vin: string, retryOnAuth: boolean = true): Promise<{
     name: string;
     licensePlate?: string;
     compositeRenders?: Array<{
@@ -421,7 +469,23 @@ module.exports = class SkodaApp extends Homey.App {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Get vehicle info failed ${response.status}: ${text}`);
+      const status = response.status;
+      
+      // Handle 401/403 by refreshing token and retrying
+      if ((status === 401 || status === 403) && retryOnAuth) {
+        this.log('[INFO] 401/403 error detected, refreshing token and retrying');
+        try {
+          const newAccessToken = await this.handleAuthError();
+          // Retry with new token (don't retry again to prevent infinite loops)
+          return await this.getVehicleInfo(newAccessToken, vin, false);
+        } catch (recoveryError) {
+          const errorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          this.error('[INFO] Failed to recover from 401/403:', errorMessage);
+          throw new Error(`Get vehicle info failed ${status}: Authentication recovery failed`);
+        }
+      }
+      
+      throw new Error(`Get vehicle info failed ${status}: ${text}`);
     }
 
     const data = await response.json() as {

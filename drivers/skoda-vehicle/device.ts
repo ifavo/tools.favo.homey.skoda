@@ -84,36 +84,94 @@ class SkodaVehicleDevice extends Homey.Device {
    * onInit is called when the device is initialized.
    */
   async onInit() {
-    this.log('SkodaVehicleDevice has been initialized');
-    
-    // Ensure VIN is stored from data, store, or settings
-    const vin = this.getStoreValue('vin') || this.getData().vin || this.getSetting('vin');
-    if (vin) {
-      await this.setStoreValue('vin', vin);
-      await this.setSettings({ vin: vin as string });
-      this.log(`Device initialized with VIN: ${vin}`);
-    } else {
-      this.log('VIN not found, will be auto-detected on first status refresh');
+    // Set up global error handlers to prevent crashes
+    process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+      const errorMessage = reason instanceof Error ? reason.message : String(reason);
+      this.error('[UNHANDLED] Unhandled promise rejection:', errorMessage);
+      // Don't crash - log and continue
+    });
+
+    process.on('uncaughtException', (error: Error) => {
+      this.error('[UNHANDLED] Uncaught exception:', error.message);
+      // Don't crash - log and continue
+    });
+
+    try {
+      this.log('SkodaVehicleDevice has been initialized');
+      
+      // Ensure VIN is stored from data, store, or settings
+      try {
+        const vin = this.getStoreValue('vin') || this.getData().vin || this.getSetting('vin');
+        if (vin) {
+          await this.setStoreValue('vin', vin);
+          await this.setSettings({ vin: vin as string });
+          this.log(`Device initialized with VIN: ${vin}`);
+        } else {
+          this.log('VIN not found, will be auto-detected on first status refresh');
+        }
+      } catch (error) {
+        this.error('[INIT] Failed to initialize VIN:', error);
+        // Continue initialization even if VIN setup fails
+      }
+      
+      // Restore low battery device state
+      try {
+        await this.restoreLowBatteryState();
+      } catch (error) {
+        this.error('[INIT] Failed to restore low battery state:', error);
+        // Continue initialization
+      }
+      
+      // Start polling for status updates
+      try {
+        await this.startPolling();
+      } catch (error) {
+        this.error('[INIT] Failed to start polling:', error);
+        // Try to restart polling after a delay
+        setTimeout(() => {
+          this.startPolling().catch((retryError) => {
+            this.error('[INIT] Failed to restart polling:', retryError);
+          });
+        }, 5000);
+      }
+      
+      // Start price update interval if low price charging is enabled
+      try {
+        const enableLowPrice = this.getSetting('enable_low_price_charging') as boolean;
+        if (enableLowPrice) {
+          await this.startPriceUpdates();
+        }
+      } catch (error) {
+        this.error('[INIT] Failed to start price updates:', error);
+        // Continue initialization
+      }
+      
+      // Start vehicle info update interval (once per day)
+      try {
+        await this.startInfoUpdates();
+      } catch (error) {
+        this.error('[INIT] Failed to start info updates:', error);
+        // Continue initialization
+      }
+      
+      // Register capability listeners if needed
+      try {
+        this.registerCapabilityListener('locked', this.onCapabilityLocked.bind(this));
+        this.registerCapabilityListener('onoff', this.onCapabilityOnOff.bind(this));
+      } catch (error) {
+        this.error('[INIT] Failed to register capability listeners:', error);
+        // Continue initialization
+      }
+      
+      this.log('[INIT] Device initialization completed');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[INIT] Critical error during initialization:', errorMessage);
+      // Set device as unavailable but don't throw - allow recovery
+      this.setUnavailable(`Initialization error: ${errorMessage.substring(0, 50)}`).catch((setError) => {
+        this.error('[INIT] Failed to set unavailable status:', setError);
+      });
     }
-    
-    // Restore low battery device state
-    await this.restoreLowBatteryState();
-    
-    // Start polling for status updates
-    await this.startPolling();
-    
-    // Start price update interval if low price charging is enabled
-    const enableLowPrice = this.getSetting('enable_low_price_charging') as boolean;
-    if (enableLowPrice) {
-      await this.startPriceUpdates();
-    }
-    
-    // Start vehicle info update interval (once per day)
-    await this.startInfoUpdates();
-    
-    // Register capability listeners if needed
-    this.registerCapabilityListener('locked', this.onCapabilityLocked.bind(this));
-    this.registerCapabilityListener('onoff', this.onCapabilityOnOff.bind(this));
   }
 
   /**
@@ -127,194 +185,390 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Get access token from app
+   * Get access token from app with error handling
    */
   async getAccessToken(): Promise<string> {
-    const app = this.homey.app as any;
-    return await app.getAccessToken();
+    try {
+      const app = this.homey.app as any;
+      return await app.getAccessToken();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[TOKEN] Failed to get access token:', errorMessage);
+      throw new Error(`Access token error: ${errorMessage}`);
+    }
   }
 
   /**
-   * Get vehicle status from API
+   * Get vehicle status from API with improved error handling
+   * Throws errors with status codes included in message for 401/403 detection
    */
   async getVehicleStatus(accessToken: string, vin: string): Promise<VehicleStatus> {
     const statusUrl = `${BASE_URL}/api/v2/vehicle-status/${vin}`;
     const chargingUrl = `${BASE_URL}/api/v1/charging/${vin}`;
 
-    const [statusResponse, chargingResponse] = await Promise.all([
-      fetch(statusUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }),
-      fetch(chargingUrl, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }),
-    ]);
+    let statusResponse: Response;
+    let chargingResponse: Response;
+
+    try {
+      [statusResponse, chargingResponse] = await Promise.all([
+        fetch(statusUrl, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }),
+        fetch(chargingUrl, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }),
+      ]);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[API] Network error fetching vehicle status:', errorMessage);
+      throw new Error(`Network error: ${errorMessage}`);
+    }
 
     if (!statusResponse.ok) {
-      const text = await statusResponse.text();
-      throw new Error(`Get status failed ${statusResponse.status}: ${text}`);
+      const text = await statusResponse.text().catch(() => 'Unable to read error response');
+      const errorMsg = `Get status failed ${statusResponse.status}: ${text.substring(0, 200)}`;
+      this.error(`[API] ${errorMsg}`);
+      // Include status code in error message for detection
+      const error = new Error(errorMsg);
+      (error as any).statusCode = statusResponse.status;
+      throw error;
     }
 
     if (!chargingResponse.ok) {
-      const text = await chargingResponse.text();
-      throw new Error(`Get charging status failed ${chargingResponse.status}: ${text}`);
+      const text = await chargingResponse.text().catch(() => 'Unable to read error response');
+      const errorMsg = `Get charging status failed ${chargingResponse.status}: ${text.substring(0, 200)}`;
+      this.error(`[API] ${errorMsg}`);
+      // Include status code in error message for detection
+      const error = new Error(errorMsg);
+      (error as any).statusCode = chargingResponse.status;
+      throw error;
     }
 
-    const status = await statusResponse.json() as VehicleStatus['status'];
-    const charging = await chargingResponse.json() as VehicleStatus['charging'];
+    try {
+      const status = await statusResponse.json() as VehicleStatus['status'];
+      const charging = await chargingResponse.json() as VehicleStatus['charging'];
 
-    return {
-      status,
-      charging,
-      timestamp: new Date().toISOString(),
-    };
+      return {
+        status,
+        charging,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[API] Failed to parse vehicle status JSON:', errorMessage);
+      throw new Error(`JSON parse error: ${errorMessage}`);
+    }
   }
 
   /**
-   * Update device capabilities from status
+   * Update device capabilities from status with improved error handling
    */
   async updateCapabilities(status: VehicleStatus): Promise<void> {
     try {
       const { status: vehicleStatus, charging } = status;
       const vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
 
-      // Lock status
-      const isLocked = vehicleStatus.overall.locked === 'YES' || 
-                       vehicleStatus.overall.reliableLockStatus === 'LOCKED';
-      await this.setCapabilityValue('locked', isLocked).catch(this.error);
+      // Update capabilities with individual error handling - don't let one failure stop others
+      try {
+        const isLocked = vehicleStatus.overall.locked === 'YES' || 
+                         vehicleStatus.overall.reliableLockStatus === 'LOCKED';
+        await this.setCapabilityValue('locked', isLocked);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update locked:', error);
+      }
 
-      // Door contact (OPEN = alarm, CLOSED = no alarm)
-      const doorsOpen = vehicleStatus.overall.doors === 'OPEN';
-      await this.setCapabilityValue('alarm_contact.door', doorsOpen).catch(this.error);
+      try {
+        const doorsOpen = vehicleStatus.overall.doors === 'OPEN';
+        await this.setCapabilityValue('alarm_contact.door', doorsOpen);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update door contact:', error);
+      }
 
-      // Trunk contact
-      const trunkOpen = vehicleStatus.detail.trunk === 'OPEN';
-      await this.setCapabilityValue('alarm_contact.trunk', trunkOpen).catch(this.error);
+      try {
+        const trunkOpen = vehicleStatus.detail.trunk === 'OPEN';
+        await this.setCapabilityValue('alarm_contact.trunk', trunkOpen);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update trunk contact:', error);
+      }
 
-      // Bonnet contact
-      const bonnetOpen = vehicleStatus.detail.bonnet === 'OPEN';
-      await this.setCapabilityValue('alarm_contact.bonnet', bonnetOpen).catch(this.error);
+      try {
+        const bonnetOpen = vehicleStatus.detail.bonnet === 'OPEN';
+        await this.setCapabilityValue('alarm_contact.bonnet', bonnetOpen);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update bonnet contact:', error);
+      }
 
-      // Window contact
-      const windowsOpen = vehicleStatus.overall.windows === 'OPEN';
-      await this.setCapabilityValue('alarm_contact.window', windowsOpen).catch(this.error);
+      try {
+        const windowsOpen = vehicleStatus.overall.windows === 'OPEN';
+        await this.setCapabilityValue('alarm_contact.window', windowsOpen);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update window contact:', error);
+      }
 
-      // Light contact
-      const lightsOn = vehicleStatus.overall.lights === 'ON';
-      await this.setCapabilityValue('alarm_contact.light', lightsOn).catch(this.error);
+      try {
+        const lightsOn = vehicleStatus.overall.lights === 'ON';
+        await this.setCapabilityValue('alarm_contact.light', lightsOn);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update light contact:', error);
+      }
 
       // Battery/Charging capabilities
-      const batteryLevel = charging.status.battery.stateOfChargeInPercent;
-      await this.setCapabilityValue('measure_battery', batteryLevel).catch(this.error);
+      let batteryLevel = 0;
+      try {
+        batteryLevel = charging.status.battery.stateOfChargeInPercent;
+        await this.setCapabilityValue('measure_battery', batteryLevel);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update battery:', error);
+      }
 
-      // Remaining range (convert meters to kilometers)
-      const rangeKm = charging.status.battery.remainingCruisingRangeInMeters / 1000;
-      await this.setCapabilityValue('measure_distance', Math.round(rangeKm)).catch(this.error);
+      try {
+        const rangeKm = charging.status.battery.remainingCruisingRangeInMeters / 1000;
+        await this.setCapabilityValue('measure_distance', Math.round(rangeKm));
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update distance:', error);
+      }
 
-      // Charging power from API
-      const chargingPower = charging.status.chargePowerInKw;
-      this.log(`[POWER] Current charging power: ${chargingPower} kW`);
-      await this.setCapabilityValue('measure_power', chargingPower).catch(this.error);
+      try {
+        const chargingPower = charging.status.chargePowerInKw;
+        this.log(`[POWER] Current charging power: ${chargingPower} kW`);
+        await this.setCapabilityValue('measure_power', chargingPower);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update power:', error);
+      }
 
-      // Charging state (on/off)
-      // Only update from API if manual override is not active
-      const isCharging = charging.status.state === 'CHARGING' || 
-                        charging.status.state === 'CHARGING_AC' ||
-                        charging.status.state === 'CHARGING_DC';
-      
-      if (!this.isManualOverrideActive()) {
-        await this.setCapabilityValue('onoff', isCharging).catch(this.error);
-        this.log(`[ONOFF] Updated from API: ${isCharging ? 'ON' : 'OFF'} (charging state: ${charging.status.state})`);
-      } else {
-        const currentOnOff = this.getCapabilityValue('onoff');
-        this.log(`[ONOFF] Skipping API update (manual override active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+      // Charging state (on/off) - only update from API if manual override is not active
+      try {
+        const isCharging = charging.status.state === 'CHARGING' || 
+                          charging.status.state === 'CHARGING_AC' ||
+                          charging.status.state === 'CHARGING_DC';
+        
+        if (!this.isManualOverrideActive()) {
+          await this.setCapabilityValue('onoff', isCharging);
+          this.log(`[ONOFF] Updated from API: ${isCharging ? 'ON' : 'OFF'} (charging state: ${charging.status.state})`);
+        } else {
+          const currentOnOff = this.getCapabilityValue('onoff');
+          this.log(`[ONOFF] Skipping API update (manual override active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+        }
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update onoff:', error);
       }
 
       // Ensure VIN is stored in both store and settings
       if (vin) {
-        await this.setStoreValue('vin', vin);
-        const currentVinSetting = this.getSetting('vin');
-        if (!currentVinSetting || currentVinSetting !== vin) {
-          await this.setSettings({ vin: vin as string });
+        try {
+          await this.setStoreValue('vin', vin);
+          const currentVinSetting = this.getSetting('vin');
+          if (!currentVinSetting || currentVinSetting !== vin) {
+            await this.setSettings({ vin: vin as string });
+          }
+        } catch (error) {
+          this.error('[CAPABILITIES] Failed to store VIN:', error);
         }
       }
 
       // Store full status in device settings for reference
-      await this.setSettings({
-        vin: vin || this.getSetting('vin') || '',
-        lastStatus: JSON.stringify(status),
-        lastUpdate: new Date().toISOString(),
-      }).catch(this.error);
+      try {
+        await this.setSettings({
+          vin: vin || this.getSetting('vin') || '',
+          lastStatus: JSON.stringify(status),
+          lastUpdate: new Date().toISOString(),
+        });
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to store status:', error);
+      }
 
       // Check and control charging device (low battery takes priority)
-      await this.checkChargingControl(batteryLevel);
+      // Wrap in try-catch to prevent crashes
+      try {
+        await this.checkChargingControl(batteryLevel);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[CAPABILITIES] Failed to check charging control:', errorMessage);
+        // Don't throw - continue with image update
+      }
 
       // Update device image from status if available
-      await this.updateDeviceImage(status);
+      try {
+        await this.updateDeviceImage(status);
+      } catch (error) {
+        this.error('[CAPABILITIES] Failed to update device image:', error);
+        // Don't throw - image update failure shouldn't break status updates
+      }
 
       this.log(`Capabilities updated successfully for VIN: ${vin || 'unknown'}`);
     } catch (error) {
-      this.error('Error updating capabilities:', error);
-      throw error;
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[CAPABILITIES] Critical error updating capabilities:', errorMessage);
+      // Don't throw - let the polling interval continue
     }
   }
 
   /**
-   * Fetch and update vehicle status
+   * Fetch and update vehicle status with improved error handling and 401 recovery
    */
   async refreshStatus(): Promise<void> {
     try {
-      const accessToken = await this.getAccessToken();
+      let accessToken: string;
+      try {
+        accessToken = await this.getAccessToken();
+      } catch (tokenError) {
+        const errorMessage = tokenError instanceof Error ? tokenError.message : String(tokenError);
+        this.error('[STATUS] Failed to get access token:', errorMessage);
+        // Try to recover by forcing token refresh
+        try {
+          const app = this.homey.app as any;
+          if (app.handleAuthError) {
+            this.log('[STATUS] Attempting to recover from token error');
+            accessToken = await app.handleAuthError();
+          } else {
+            throw tokenError; // Re-throw if recovery method not available
+          }
+        } catch (recoveryError) {
+          const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          this.error('[STATUS] Token recovery failed:', recoveryMessage);
+          this.setUnavailable(`Token error: ${recoveryMessage.substring(0, 50)}`).catch(this.error);
+          return; // Exit early
+        }
+      }
       
       let vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
       
       // Auto-detect VIN if not stored
       if (!vin) {
         this.log('VIN not found, attempting to auto-detect...');
-        const app = this.homey.app as any;
-        const vehicles = await app.listVehicles(accessToken);
-        if (vehicles.length > 0) {
-          vin = vehicles[0].vin;
-          await this.setStoreValue('vin', vin);
-          await this.setSettings({ vin: vin as string });
-          this.log(`Auto-detected VIN: ${vin}`);
-        } else {
-          throw new Error('No vehicles found and VIN not configured');
+        try {
+          const app = this.homey.app as any;
+          let vehicles;
+          try {
+            vehicles = await app.listVehicles(accessToken);
+          } catch (listError: any) {
+            // Check if it's a 401/403 error - if so, try to recover
+            const errorMessage = listError instanceof Error ? listError.message : String(listError);
+            const statusCode = listError.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
+            
+            if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
+              this.log('[STATUS] 401/403 error detected in listVehicles, attempting token recovery');
+              if (app && app.handleAuthError) {
+                const newAccessToken = await app.handleAuthError();
+                vehicles = await app.listVehicles(newAccessToken);
+                this.log('[STATUS] Successfully recovered from 401/403 error in listVehicles');
+              } else {
+                throw listError;
+              }
+            } else {
+              throw listError;
+            }
+          }
+          
+          if (vehicles && vehicles.length > 0) {
+            vin = vehicles[0].vin;
+            await this.setStoreValue('vin', vin);
+            await this.setSettings({ vin: vin as string });
+            this.log(`Auto-detected VIN: ${vin}`);
+          } else {
+            throw new Error('No vehicles found and VIN not configured');
+          }
+        } catch (vinError) {
+          const errorMessage = vinError instanceof Error ? vinError.message : String(vinError);
+          this.error('[STATUS] Failed to auto-detect VIN:', errorMessage);
+          this.setUnavailable(`VIN detection failed: ${errorMessage.substring(0, 50)}`).catch(this.error);
+          return; // Exit early, don't throw
         }
       }
 
-      const status = await this.getVehicleStatus(accessToken, vin);
+      let status: VehicleStatus;
+      try {
+        status = await this.getVehicleStatus(accessToken, vin);
+      } catch (apiError: any) {
+        // Check if it's a 401/403 error - if so, try to recover
+        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+        const statusCode = apiError.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
+        
+        if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
+          this.log('[STATUS] 401/403 error detected, attempting token recovery');
+          try {
+            const app = this.homey.app as any;
+            if (app.handleAuthError) {
+              // Force refresh token (bypasses rate limit)
+              const newAccessToken = await app.handleAuthError();
+              // Retry the API call with new token
+              status = await this.getVehicleStatus(newAccessToken, vin);
+              this.log('[STATUS] Successfully recovered from 401/403 error with new token');
+            } else {
+              this.error('[STATUS] handleAuthError method not available on app');
+              throw apiError; // Re-throw if recovery method not available
+            }
+          } catch (recoveryError) {
+            const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+            this.error('[STATUS] Failed to recover from 401/403 error:', recoveryMessage);
+            this.setUnavailable(`Auth error: ${recoveryMessage.substring(0, 50)}`).catch(this.error);
+            return; // Exit early
+          }
+        } else {
+          // Not an auth error, re-throw
+          throw apiError;
+        }
+      }
+
       await this.updateCapabilities(status);
+
+      // Mark device as available after successful update
+      await this.setAvailable().catch((setError) => {
+        this.error('[STATUS] Failed to set available status:', setError);
+      });
 
       this.log(`Status refreshed for VIN: ${vin}`);
     } catch (error) {
-      this.error('Error refreshing status:', error);
-      this.setUnavailable(`Error: ${error instanceof Error ? error.message : String(error)}`).catch(this.error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[STATUS] Error refreshing status:', errorMessage);
+      
+      // Set unavailable but don't throw - allow interval to retry
+      this.setUnavailable(`Error: ${errorMessage.substring(0, 100)}`).catch((setError) => {
+        this.error('[STATUS] Failed to set unavailable status:', setError);
+      });
+      
+      // Don't throw - let the interval continue running
     }
   }
 
   /**
-   * Start polling for status updates
+   * Start polling for status updates with error recovery
    */
   async startPolling(): Promise<void> {
     this.stopPolling();
     
-    // Initial refresh
-    await this.refreshStatus();
-    this.setAvailable().catch(this.error);
-
-    // Set up interval
+    // Initial status refresh with error handling
+    try {
+      await this.refreshStatus();
+      await this.setAvailable();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[POLLING] Initial status refresh failed:', errorMessage);
+      // Don't throw - continue to set up interval
+    }
+    
+    // Set up interval with comprehensive error handling
     this.pollingInterval = this.homey.setInterval(() => {
-      this.refreshStatus().catch(this.error);
+      this.refreshStatus().catch((error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[POLLING] Status refresh failed:', errorMessage);
+        // Don't crash - interval will retry on next cycle
+        // Set device as unavailable if error persists
+        this.setUnavailable(`Status update error: ${errorMessage.substring(0, 50)}`).catch((setError) => {
+          this.error('[POLLING] Failed to set unavailable status:', setError);
+        });
+      });
     }, this.POLL_INTERVAL);
+    
+    this.log('[POLLING] Started polling interval');
   }
 
   /**
@@ -328,17 +582,27 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Start price update interval (runs every 15 minutes)
+   * Start price update interval (runs every 15 minutes) with error recovery
    */
   async startPriceUpdates(): Promise<void> {
     this.stopPriceUpdates();
     
-    // Initial price update
-    await this.updatePricesAndCheckCharging();
+    // Initial price update with error handling
+    try {
+      await this.updatePricesAndCheckCharging();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[LOW_PRICE] Initial price update failed:', errorMessage);
+      // Don't throw - continue to set up interval
+    }
     
-    // Set up interval for price updates
+    // Set up interval with comprehensive error handling
     this.priceUpdateInterval = this.homey.setInterval(() => {
-      this.updatePricesAndCheckCharging().catch(this.error);
+      this.updatePricesAndCheckCharging().catch((error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[LOW_PRICE] Price update failed:', errorMessage);
+        // Don't crash - interval will retry on next cycle
+      });
     }, this.PRICE_UPDATE_INTERVAL);
     
     this.log(`[LOW_PRICE] Started price update interval (every ${this.PRICE_UPDATE_INTERVAL / 60000} minutes)`);
@@ -356,27 +620,42 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Start vehicle info update interval (runs once per day)
+   * Start vehicle info update interval (runs once per day) with error recovery
    */
   async startInfoUpdates(): Promise<void> {
     this.stopInfoUpdates();
     
     // Check if we need to fetch info immediately (if never fetched or last fetch was more than 24h ago)
-    const lastInfoFetch = this.getSetting('_last_info_fetch') as number | undefined;
-    const now = Date.now();
-    const shouldFetchNow = !lastInfoFetch || (now - lastInfoFetch) >= this.INFO_UPDATE_INTERVAL;
-    
-    if (shouldFetchNow) {
-      this.log('[INFO] Fetching vehicle info immediately (never fetched or cache expired)');
-      await this.refreshVehicleInfo().catch(this.error);
-    } else {
-      const hoursUntilNext = Math.ceil((this.INFO_UPDATE_INTERVAL - (now - lastInfoFetch)) / (60 * 60 * 1000));
-      this.log(`[INFO] Vehicle info cache still valid, will refresh in ${hoursUntilNext} hour(s)`);
+    try {
+      const lastInfoFetch = this.getSetting('_last_info_fetch') as number | undefined;
+      const now = Date.now();
+      const shouldFetchNow = !lastInfoFetch || (now - lastInfoFetch) >= this.INFO_UPDATE_INTERVAL;
+      
+      if (shouldFetchNow) {
+        this.log('[INFO] Fetching vehicle info immediately (never fetched or cache expired)');
+        try {
+          await this.refreshVehicleInfo();
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.error('[INFO] Initial vehicle info fetch failed:', errorMessage);
+          // Don't throw - continue to set up interval
+        }
+      } else {
+        const hoursUntilNext = Math.ceil((this.INFO_UPDATE_INTERVAL - (now - lastInfoFetch)) / (60 * 60 * 1000));
+        this.log(`[INFO] Vehicle info cache still valid, will refresh in ${hoursUntilNext} hour(s)`);
+      }
+    } catch (error) {
+      this.error('[INFO] Error checking info cache:', error);
+      // Continue to set up interval
     }
     
-    // Set up interval for daily info updates
+    // Set up interval for daily info updates with error handling
     this.infoUpdateInterval = this.homey.setInterval(() => {
-      this.refreshVehicleInfo().catch(this.error);
+      this.refreshVehicleInfo().catch((error) => {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[INFO] Vehicle info refresh failed:', errorMessage);
+        // Don't crash - interval will retry on next cycle
+      });
     }, this.INFO_UPDATE_INTERVAL);
     
     this.log(`[INFO] Started vehicle info update interval (every ${this.INFO_UPDATE_INTERVAL / (60 * 60 * 1000)} hours)`);
@@ -394,7 +673,7 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Fetch and update vehicle info (specification, renders, license plate, etc.)
+   * Fetch and update vehicle info (specification, renders, license plate, etc.) with error recovery
    */
   async refreshVehicleInfo(): Promise<void> {
     try {
@@ -405,9 +684,49 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       this.log(`[INFO] Fetching vehicle info for VIN: ${vin}`);
-      const accessToken = await this.getAccessToken();
+      
+      let accessToken: string;
+      try {
+        accessToken = await this.getAccessToken();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[INFO] Failed to get access token for vehicle info:', errorMessage);
+        throw error; // Re-throw - can't proceed without token
+      }
+      
+      let info: any;
       const app = this.homey.app as any;
-      const info = await app.getVehicleInfo(accessToken, vin);
+      try {
+        info = await app.getVehicleInfo(accessToken, vin);
+      } catch (error: any) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const statusCode = error.statusCode || (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
+        
+        // Check if it's a 401/403 error - if so, try to recover
+        if (statusCode === 401 || statusCode === 403 || errorMessage.includes('401') || errorMessage.includes('403')) {
+          this.log('[INFO] 401/403 error detected in getVehicleInfo, attempting token recovery');
+          try {
+            if (app && app.handleAuthError) {
+              // Force refresh token (bypasses rate limit)
+              const newAccessToken = await app.handleAuthError();
+              // Retry the API call with new token
+              info = await app.getVehicleInfo(newAccessToken, vin);
+              this.log('[INFO] Successfully recovered from 401/403 error with new token');
+            } else {
+              this.error('[INFO] handleAuthError method not available on app');
+              throw error; // Re-throw if recovery method not available
+            }
+          } catch (recoveryError) {
+            const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+            this.error('[INFO] Failed to recover from 401/403 error:', recoveryMessage);
+            throw recoveryError; // Re-throw recovery error
+          }
+        } else {
+          // Not an auth error, re-throw
+          this.error('[INFO] Failed to fetch vehicle info from API:', errorMessage);
+          throw error;
+        }
+      }
 
       // Store license plate
       if (info.licensePlate) {
@@ -565,9 +884,15 @@ class SkodaVehicleDevice extends Homey.Device {
    * Handle locked capability change (if device supports locking/unlocking)
    */
   async onCapabilityLocked(value: boolean): Promise<void> {
-    this.log(`Locked capability changed to: ${value}`);
-    // Note: The API might support lock/unlock commands, but that's not in the provided code
-    // For now, this is read-only, but we keep the listener for future implementation
+    try {
+      this.log(`[LOCKED] Capability changed to: ${value}`);
+      // Note: The API might support lock/unlock commands, but that's not in the provided code
+      // For now, this is read-only, but we keep the listener for future implementation
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[LOCKED] Error handling locked capability change:', errorMessage);
+      // Don't throw - capability listener errors shouldn't crash the device
+    }
   }
 
   /**
@@ -602,26 +927,42 @@ class SkodaVehicleDevice extends Homey.Device {
    * This allows manual control - automatic control happens via checkChargingControl
    */
   async onCapabilityOnOff(value: boolean): Promise<void> {
-    this.log(`[ONOFF] Manual control: ${value}`);
-    
-    // Store timestamp of manual control
-    const now = Date.now();
-    await this.setSettings({ 
-      _manual_override_timestamp: now,
-    }).catch(this.error);
-    this.log(`[ONOFF] Manual override set, will remain active for ${this.MANUAL_OVERRIDE_DURATION / (60 * 1000)} minutes`);
-    
-    // Clear automatic control flags when user manually controls
-    if (!value) {
-      this.lowBatteryDeviceEnabled = false;
-      this.lowPriceDeviceEnabled = false;
-      await this.setSettings({ 
-        _low_battery_enabled: false,
-        _low_price_enabled: false,
-      }).catch(this.error);
-      this.log('[ONOFF] Cleared automatic control flags due to manual off');
+    try {
+      this.log(`[ONOFF] Manual control: ${value}`);
+      
+      // Store timestamp of manual control
+      const now = Date.now();
+      try {
+        await this.setSettings({ 
+          _manual_override_timestamp: now,
+        });
+        this.log(`[ONOFF] Manual override set, will remain active for ${this.MANUAL_OVERRIDE_DURATION / (60 * 1000)} minutes`);
+      } catch (error) {
+        this.error('[ONOFF] Failed to store manual override timestamp:', error);
+        // Continue even if storage fails
+      }
+      
+      // Clear automatic control flags when user manually controls
+      if (!value) {
+        try {
+          this.lowBatteryDeviceEnabled = false;
+          this.lowPriceDeviceEnabled = false;
+          await this.setSettings({ 
+            _low_battery_enabled: false,
+            _low_price_enabled: false,
+          });
+          this.log('[ONOFF] Cleared automatic control flags due to manual off');
+        } catch (error) {
+          this.error('[ONOFF] Failed to clear automatic control flags:', error);
+          // Continue even if clearing fails
+        }
+      }
+      // The capability value is already set by Homey, we just log and clear flags
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error('[ONOFF] Error handling onoff capability change:', errorMessage);
+      // Don't throw - capability listener errors shouldn't crash the device
     }
-    // The capability value is already set by Homey, we just log and clear flags
   }
 
   /**

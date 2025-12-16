@@ -74,9 +74,9 @@ class SkodaVehicleDriver extends Homey.Driver {
   }
 
   /**
-   * List vehicles from garage
+   * List vehicles from garage with 401/403 recovery
    */
-  async listVehicles(accessToken: string): Promise<Vehicle[]> {
+  async listVehicles(accessToken: string, retryOnAuth: boolean = true): Promise<Vehicle[]> {
     this.log('[PAIR] listVehicles: preparing request to garage API');
     const url =
       `${BASE_URL}/api/v2/garage?connectivityGenerations=MOD1` +
@@ -97,7 +97,28 @@ class SkodaVehicleDriver extends Homey.Driver {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`List vehicles failed ${response.status}: ${text}`);
+      const status = response.status;
+      
+      // Handle 401/403 by refreshing token and retrying
+      if ((status === 401 || status === 403) && retryOnAuth) {
+        this.log('[PAIR] 401/403 error detected, refreshing token and retrying');
+        try {
+          const app = this.homey.app as any;
+          if (app.handleAuthError) {
+            const newAccessToken = await app.handleAuthError();
+            // Retry with new token (don't retry again to prevent infinite loops)
+            return await this.listVehicles(newAccessToken, false);
+          } else {
+            throw new Error('handleAuthError method not available');
+          }
+        } catch (recoveryError) {
+          const errorMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          this.error('[PAIR] Failed to recover from 401/403:', errorMessage);
+          throw new Error(`List vehicles failed ${status}: Authentication recovery failed`);
+        }
+      }
+      
+      throw new Error(`List vehicles failed ${status}: ${text}`);
     }
 
     const data = await response.json() as { vehicles?: Vehicle[] };
