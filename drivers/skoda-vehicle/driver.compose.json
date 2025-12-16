@@ -14,7 +14,8 @@
     "alarm_contact.trunk",
     "alarm_contact.bonnet",
     "alarm_contact.window",
-    "alarm_contact.light"
+    "alarm_contact.light",
+    "next_charging_times"
   ],
   "capabilitiesOptions": {
     "locked": {
@@ -75,6 +76,12 @@
       "title": {
         "en": "Light Contact"
       }
+    },
+    "next_charging_times": {
+      "title": {
+        "en": "Next Charging Times",
+        "de": "Nächste Ladezeiten"
+      }
     }
   },
   "images": {
@@ -134,19 +141,7 @@
           "hint": {
             "en": "Timezone for price time formatting (e.g., Europe/Berlin). Leave empty to auto-detect from Homey settings."
           }
-        },
-    {
-      "id": "next_charging_times",
-      "type": "text",
-      "label": {
-        "en": "Next Charging Times"
-      },
-      "value": "",
-      "visible": true,
-      "hint": {
-        "en": "Next scheduled charging times (automatically updated)"
-      }
-    }
+        }
   ],
   "pair": [
     {

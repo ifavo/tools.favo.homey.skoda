@@ -135,14 +135,19 @@ class SkodaVehicleDevice extends Homey.Device {
         }, 5000);
       }
       
-      // Start price update interval if low price charging is enabled
+      // Always start price updates to show next charging times (even if feature is disabled)
       try {
-        const enableLowPrice = this.getSetting('enable_low_price_charging') as boolean;
-        if (enableLowPrice) {
-          await this.startPriceUpdates();
-        }
+        // Don't set "Fetching prices..." here - let startPriceUpdates handle it
+        // This avoids setting it before the capability is properly registered
+        await this.startPriceUpdates();
       } catch (error) {
         this.error('[INIT] Failed to start price updates:', error);
+        // Set error message if initialization fails
+        try {
+          await this.setCapabilityValue('next_charging_times', 'Failed to start price updates');
+        } catch (capError) {
+          // Capability might not be registered yet, that's okay
+        }
         // Continue initialization
       }
       
@@ -551,6 +556,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
   /**
    * Start price update interval (runs every 15 minutes) with error recovery
+   * Always runs to update next charging times display, even if low price charging is disabled
    */
   async startPriceUpdates(): Promise<void> {
     this.stopPriceUpdates();
@@ -561,6 +567,13 @@ class SkodaVehicleDevice extends Homey.Device {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.error('[LOW_PRICE] Initial price update failed:', errorMessage);
+      // Set capability value to show error message
+      try {
+        await this.setCapabilityValue('next_charging_times', 'Failed to fetch prices - will retry');
+      } catch (capError) {
+        // Capability might not be registered yet, that's okay
+        this.log('[LOW_PRICE] Could not set next_charging_times capability on error');
+      }
       // Don't throw - continue to set up interval
     }
     
@@ -765,33 +778,32 @@ class SkodaVehicleDevice extends Homey.Device {
 
   /**
    * Update prices and check if charging should be controlled
+   * Always fetches prices to update next charging times display, even if feature is disabled
    */
   async updatePricesAndCheckCharging(): Promise<void> {
     try {
-      const deviceId = this.getSetting('low_battery_device_id') as string;
-      if (!deviceId || deviceId.trim().length === 0) {
-        return;
-      }
-
-      const enableLowPrice = this.getSetting('enable_low_price_charging') as boolean;
-      if (!enableLowPrice) {
-        return;
-      }
-
       this.log('[LOW_PRICE] Updating prices from aWATTar API');
       
       // Auto-detect timezone if not configured, fallback to Homey's timezone
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
       const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
 
-      // Load cache from store
+      // Always load cache and fetch prices to update display
       const cache = await this.loadPriceCache();
-
-      // Fetch and update prices
       const updatedCache = await this.fetchAndUpdatePrices(cache);
 
       // Find cheapest hours
       const cheapest = this.findCheapestHours(updatedCache, hoursCount);
+
+      // Always update status display (even if feature is disabled)
+      await this.updatePriceStatus(cheapest, timezone);
+
+      // Only control charging if feature is enabled
+      const enableLowPrice = this.getSetting('enable_low_price_charging') as boolean;
+      if (!enableLowPrice) {
+        this.log('[LOW_PRICE] Low price charging is disabled, but prices updated for display');
+        return;
+      }
 
       // Check if current time is in cheap period
       const now = Date.now();
@@ -823,12 +835,15 @@ class SkodaVehicleDevice extends Homey.Device {
         }
       }
 
-      // Update status
-      await this.updatePriceStatus(cheapest, timezone);
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.error('[LOW_PRICE] Error in price update:', errorMessage);
+      // Update capability to show error
+      try {
+        await this.setCapabilityValue('next_charging_times', `Error: ${errorMessage.substring(0, 30)}...`);
+      } catch (capError) {
+        // Ignore if capability not available
+      }
     }
   }
 
@@ -1228,13 +1243,32 @@ class SkodaVehicleDevice extends Homey.Device {
         }
       }
 
-      // Store in device settings (visible as attribute)
-      await this.setSettings({ 
-        next_charging_times: listString,
-      }).catch(this.error);
+      // Store as device store value for potential future use
+      await this.setStoreValue('next_charging_times', listString).catch(this.error);
+      
+      // Update capability value so it appears as a status option
+      try {
+        await this.setCapabilityValue('next_charging_times', listString);
+        this.log(`[LOW_PRICE] Next charging times capability updated: ${listString}`);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        this.error('[LOW_PRICE] Could not set next_charging_times capability:', errorMessage);
+        // If capability doesn't exist, log it but don't fail
+        if (errorMessage.includes('not found') || errorMessage.includes('does not exist') || errorMessage.includes('not registered')) {
+          this.log('[LOW_PRICE] Capability not registered - device may need to be re-added for custom capability to work');
+        }
+      }
+      
       this.log(`[LOW_PRICE] Next charging times: ${listString}`);
     } catch (error) {
-      this.error(`[LOW_PRICE] Failed to update status:`, error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.error(`[LOW_PRICE] Failed to update status:`, errorMessage);
+      // Try to update capability with error message
+      try {
+        await this.setCapabilityValue('next_charging_times', `Error updating times`);
+      } catch (capError) {
+        // Ignore if capability not available
+      }
     }
   }
 
