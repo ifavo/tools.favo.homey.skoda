@@ -98,7 +98,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
     try {
       this.log('SkodaVehicleDevice has been initialized');
-      
+
       // Ensure VIN is stored from data, store, or settings
       try {
         const vin = this.getStoreValue('vin') || this.getData().vin || this.getSetting('vin');
@@ -113,7 +113,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[INIT] Failed to initialize VIN:', error);
         // Continue initialization even if VIN setup fails
       }
-      
+
       // Restore low battery device state
       try {
         await this.restoreLowBatteryState();
@@ -121,7 +121,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[INIT] Failed to restore low battery state:', error);
         // Continue initialization
       }
-      
+
       // Start polling for status updates
       try {
         await this.startPolling();
@@ -134,7 +134,7 @@ class SkodaVehicleDevice extends Homey.Device {
           });
         }, 5000);
       }
-      
+
       // Always start price updates to show next charging times (even if feature is disabled)
       try {
         // Don't set "Fetching prices..." here - let startPriceUpdates handle it
@@ -150,7 +150,7 @@ class SkodaVehicleDevice extends Homey.Device {
         }
         // Continue initialization
       }
-      
+
       // Start vehicle info update interval (once per day)
       try {
         await this.startInfoUpdates();
@@ -158,7 +158,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[INIT] Failed to start info updates:', error);
         // Continue initialization
       }
-      
+
       // Register capability listeners if needed
       try {
         this.registerCapabilityListener('locked', this.onCapabilityLocked.bind(this));
@@ -167,7 +167,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[INIT] Failed to register capability listeners:', error);
         // Continue initialization
       }
-      
+
       this.log('[INIT] Device initialization completed');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -283,8 +283,8 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Update capabilities with individual error handling - don't let one failure stop others
       try {
-        const isLocked = vehicleStatus.overall.locked === 'YES' || 
-                         vehicleStatus.overall.reliableLockStatus === 'LOCKED';
+        const isLocked = vehicleStatus.overall.locked === 'YES' ||
+          vehicleStatus.overall.reliableLockStatus === 'LOCKED';
         await this.setCapabilityValue('locked', isLocked);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update locked:', error);
@@ -349,18 +349,23 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[CAPABILITIES] Failed to update power:', error);
       }
 
-      // Charging state (on/off) - only update from API if manual override is not active
+      // Charging state (on/off) - only update from API if manual override is not active AND automatic control is not active
       try {
-        const isCharging = charging.status.state === 'CHARGING' || 
-                          charging.status.state === 'CHARGING_AC' ||
-                          charging.status.state === 'CHARGING_DC';
-        
-        if (!this.isManualOverrideActive()) {
+        const isCharging = charging.status.state === 'CHARGING' || charging.status.state === 'CHARGING_AC' || charging.status.state === 'CHARGING_DC';
+
+        // Check if automatic control is active (low price or low battery)
+        const isAutomaticControlActive = this.isAutomaticControlActive();
+
+        if (!this.isManualOverrideActive() && !isAutomaticControlActive) {
           await this.setCapabilityValue('onoff', isCharging);
           this.log(`[ONOFF] Updated from API: ${isCharging ? 'ON' : 'OFF'} (charging state: ${charging.status.state})`);
         } else {
           const currentOnOff = this.getCapabilityValue('onoff');
-          this.log(`[ONOFF] Skipping API update (manual override active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+          if (this.isManualOverrideActive()) {
+            this.log(`[ONOFF] Skipping API update (manual override active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+          } else if (isAutomaticControlActive) {
+            this.log(`[ONOFF] Skipping API update (automatic control active), keeping current state: ${currentOnOff ? 'ON' : 'OFF'}`);
+          }
         }
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update onoff:', error);
@@ -443,9 +448,9 @@ class SkodaVehicleDevice extends Homey.Device {
           return; // Exit early
         }
       }
-      
+
       let vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
-      
+
       // Auto-detect VIN if not stored
       if (!vin) {
         this.log('VIN not found, attempting to auto-detect...');
@@ -455,7 +460,7 @@ class SkodaVehicleDevice extends Homey.Device {
           const vehicles = await (app && typeof app.executeWithAuthRecovery === 'function'
             ? app.executeWithAuthRecovery(async (token: string) => app.listVehicles(token), 'STATUS')
             : app.listVehicles(accessToken));
-          
+
           if (vehicles && vehicles.length > 0) {
             vin = vehicles[0].vin;
             await this.setStoreValue('vin', vin);
@@ -502,12 +507,12 @@ class SkodaVehicleDevice extends Homey.Device {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.error('[STATUS] Error refreshing status:', errorMessage);
-      
+
       // Set unavailable but don't throw - allow interval to retry
       this.setUnavailable(`Error: ${errorMessage.substring(0, 100)}`).catch((setError) => {
         this.error('[STATUS] Failed to set unavailable status:', setError);
       });
-      
+
       // Don't throw - let the interval continue running
     }
   }
@@ -517,7 +522,7 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async startPolling(): Promise<void> {
     this.stopPolling();
-    
+
     // Initial status refresh with error handling
     try {
       await this.refreshStatus();
@@ -527,7 +532,7 @@ class SkodaVehicleDevice extends Homey.Device {
       this.error('[POLLING] Initial status refresh failed:', errorMessage);
       // Don't throw - continue to set up interval
     }
-    
+
     // Set up interval with comprehensive error handling
     this.pollingInterval = this.homey.setInterval(() => {
       this.refreshStatus().catch((error) => {
@@ -540,7 +545,7 @@ class SkodaVehicleDevice extends Homey.Device {
         });
       });
     }, this.POLL_INTERVAL);
-    
+
     this.log('[POLLING] Started polling interval');
   }
 
@@ -560,7 +565,7 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async startPriceUpdates(): Promise<void> {
     this.stopPriceUpdates();
-    
+
     // Initial price update with error handling
     try {
       await this.updatePricesAndCheckCharging();
@@ -576,7 +581,7 @@ class SkodaVehicleDevice extends Homey.Device {
       }
       // Don't throw - continue to set up interval
     }
-    
+
     // Set up interval with comprehensive error handling
     this.priceUpdateInterval = this.homey.setInterval(() => {
       this.updatePricesAndCheckCharging().catch((error) => {
@@ -585,7 +590,7 @@ class SkodaVehicleDevice extends Homey.Device {
         // Don't crash - interval will retry on next cycle
       });
     }, this.PRICE_UPDATE_INTERVAL);
-    
+
     this.log(`[LOW_PRICE] Started price update interval (every ${this.PRICE_UPDATE_INTERVAL / 60000} minutes)`);
   }
 
@@ -605,13 +610,13 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async startInfoUpdates(): Promise<void> {
     this.stopInfoUpdates();
-    
+
     // Check if we need to fetch info immediately (if never fetched or last fetch was more than 24h ago)
     try {
       const lastInfoFetch = this.getSetting('_last_info_fetch') as number | undefined;
       const now = Date.now();
       const shouldFetchNow = !lastInfoFetch || (now - lastInfoFetch) >= this.INFO_UPDATE_INTERVAL;
-      
+
       if (shouldFetchNow) {
         this.log('[INFO] Fetching vehicle info immediately (never fetched or cache expired)');
         try {
@@ -629,7 +634,7 @@ class SkodaVehicleDevice extends Homey.Device {
       this.error('[INFO] Error checking info cache:', error);
       // Continue to set up interval
     }
-    
+
     // Set up interval for daily info updates with error handling
     this.infoUpdateInterval = this.homey.setInterval(() => {
       this.refreshVehicleInfo().catch((error) => {
@@ -638,7 +643,7 @@ class SkodaVehicleDevice extends Homey.Device {
         // Don't crash - interval will retry on next cycle
       });
     }, this.INFO_UPDATE_INTERVAL);
-    
+
     this.log(`[INFO] Started vehicle info update interval (every ${this.INFO_UPDATE_INTERVAL / (60 * 60 * 1000)} hours)`);
   }
 
@@ -665,7 +670,7 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       this.log(`[INFO] Fetching vehicle info for VIN: ${vin}`);
-      
+
       let accessToken: string;
       try {
         accessToken = await this.getAccessToken();
@@ -674,7 +679,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[INFO] Failed to get access token for vehicle info:', errorMessage);
         throw error; // Re-throw - can't proceed without token
       }
-      
+
       // Use central auth recovery for getVehicleInfo
       const app = this.homey.app as any;
       let info: any;
@@ -695,7 +700,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Store license plate
       if (info.licensePlate) {
-        await this.setSettings({ 
+        await this.setSettings({
           license_plate: info.licensePlate,
         }).catch(this.error);
         this.log(`[INFO] License plate stored: ${info.licensePlate}`);
@@ -705,7 +710,7 @@ class SkodaVehicleDevice extends Homey.Device {
       if (info.name) {
         const currentName = this.getName();
         if (currentName !== info.name) {
-          await this.setSettings({ 
+          await this.setSettings({
             vehicle_name: info.name,
           }).catch(this.error);
           this.log(`[INFO] Vehicle name stored: ${info.name}`);
@@ -725,7 +730,7 @@ class SkodaVehicleDevice extends Homey.Device {
       // Extract and store image URL from composite_renders
       // Prefer HOME view, fallback to UNMODIFIED_EXTERIOR_SIDE
       let imageUrl: string | undefined;
-      
+
       if (info.compositeRenders && info.compositeRenders.length > 0) {
         // Try HOME view first
         const homeRender = info.compositeRenders.find((r: { viewType: string }) => r.viewType === 'HOME');
@@ -737,7 +742,7 @@ class SkodaVehicleDevice extends Homey.Device {
             this.log(`[INFO] Found HOME view image URL`);
           }
         }
-        
+
         // Fallback to UNMODIFIED_EXTERIOR_SIDE
         if (!imageUrl) {
           const sideRender = info.compositeRenders.find((r: { viewType: string }) => r.viewType === 'UNMODIFIED_EXTERIOR_SIDE');
@@ -753,10 +758,10 @@ class SkodaVehicleDevice extends Homey.Device {
 
       if (imageUrl) {
         this.log(`[INFO] Image URL from vehicle info: ${imageUrl}`);
-        await this.setSettings({ 
+        await this.setSettings({
           _vehicle_image_url: imageUrl,
         }).catch(this.error);
-        
+
         // Update device image immediately
         await this.updateDeviceImageFromUrl(imageUrl);
       } else {
@@ -764,7 +769,7 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       // Store last fetch timestamp
-      await this.setSettings({ 
+      await this.setSettings({
         _last_info_fetch: Date.now(),
       }).catch(this.error);
 
@@ -783,7 +788,7 @@ class SkodaVehicleDevice extends Homey.Device {
   async updatePricesAndCheckCharging(): Promise<void> {
     try {
       this.log('[LOW_PRICE] Updating prices from aWATTar API');
-      
+
       // Auto-detect timezone if not configured, fallback to Homey's timezone
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
       const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
@@ -812,7 +817,7 @@ class SkodaVehicleDevice extends Homey.Device {
       // Control device (only if battery is not low - low battery takes priority)
       const batteryLevel = this.getCapabilityValue('measure_battery') as number;
       const threshold = this.getSetting('low_battery_threshold') as number;
-      
+
       if (threshold && batteryLevel < threshold) {
         this.log('[LOW_PRICE] Battery is low, skipping price-based control (low battery takes priority)');
         return;
@@ -875,30 +880,48 @@ class SkodaVehicleDevice extends Homey.Device {
       const now = Date.now();
       const timeSinceManual = now - manualOverrideTimestamp;
       const isActive = timeSinceManual < this.MANUAL_OVERRIDE_DURATION;
-      
+
       if (isActive) {
         // Only log remaining time occasionally (every 5 minutes) to avoid spam
         const remainingMinutes = Math.ceil((this.MANUAL_OVERRIDE_DURATION - timeSinceManual) / (60 * 1000));
         const lastLogTime = this.getSetting('_last_override_log_time') as number | undefined;
         if (!lastLogTime || (now - lastLogTime) > 5 * 60 * 1000) {
           this.log(`[ONOFF] Manual override active, ${remainingMinutes} minute(s) remaining`);
-          this.setSettings({ _last_override_log_time: now }).catch(() => {});
+          this.setSettings({ _last_override_log_time: now }).catch(() => { });
         }
       } else {
         // Only log expiration once - check if we've already logged it
         const lastExpirationLog = this.getSetting('_last_expiration_log_time') as number | undefined;
         const expirationTime = manualOverrideTimestamp + this.MANUAL_OVERRIDE_DURATION;
-        
+
         // Only log if we haven't logged this expiration yet, or if it's a new expiration
         if (!lastExpirationLog || lastExpirationLog < expirationTime) {
           this.log('[ONOFF] Manual override expired, automation can take control');
-          this.setSettings({ _last_expiration_log_time: now }).catch(() => {});
+          this.setSettings({ _last_expiration_log_time: now }).catch(() => { });
         }
       }
-      
+
       return isActive;
     } catch (error) {
       this.error('[ONOFF] Error checking manual override:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if automatic control (low price or low battery) is currently active
+   */
+  private isAutomaticControlActive(): boolean {
+    try {
+      // Check if device was enabled due to low price or low battery
+      const lowPriceEnabled = this.getSetting('_low_price_enabled') as boolean;
+      const lowBatteryEnabled = this.getSetting('_low_battery_enabled') as boolean;
+
+      // Also check in-memory flags as they might be more up-to-date
+      return (lowPriceEnabled || this.lowPriceDeviceEnabled) ||
+        (lowBatteryEnabled || this.lowBatteryDeviceEnabled);
+    } catch (error) {
+      this.error('[ONOFF] Error checking automatic control:', error);
       return false;
     }
   }
@@ -910,11 +933,11 @@ class SkodaVehicleDevice extends Homey.Device {
   async onCapabilityOnOff(value: boolean): Promise<void> {
     try {
       this.log(`[ONOFF] Manual control: ${value}`);
-      
+
       // Store timestamp of manual control
       const now = Date.now();
       try {
-        await this.setSettings({ 
+        await this.setSettings({
           _manual_override_timestamp: now,
           _last_override_log_time: now, // Reset log time for new override
           _last_expiration_log_time: 0, // Clear expiration log time so we log when it expires
@@ -924,13 +947,13 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[ONOFF] Failed to store manual override timestamp:', error);
         // Continue even if storage fails
       }
-      
+
       // Clear automatic control flags when user manually controls
       if (!value) {
         try {
           this.lowBatteryDeviceEnabled = false;
           this.lowPriceDeviceEnabled = false;
-          await this.setSettings({ 
+          await this.setSettings({
             _low_battery_enabled: false,
             _low_price_enabled: false,
           });
@@ -1245,7 +1268,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Store as device store value for potential future use
       await this.setStoreValue('next_charging_times', listString).catch(this.error);
-      
+
       // Update capability value so it appears as a status option
       try {
         await this.setCapabilityValue('next_charging_times', listString);
@@ -1258,7 +1281,7 @@ class SkodaVehicleDevice extends Homey.Device {
           this.log('[LOW_PRICE] Capability not registered - device may need to be re-added for custom capability to work');
         }
       }
-      
+
       this.log(`[LOW_PRICE] Next charging times: ${listString}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1278,7 +1301,7 @@ class SkodaVehicleDevice extends Homey.Device {
   async turnOnChargingSelf(dueToLowBattery: boolean): Promise<void> {
     try {
       await this.setCapabilityValue('onoff', true);
-      
+
       if (dueToLowBattery) {
         this.lowBatteryDeviceEnabled = true;
         await this.setSettings({ _low_battery_enabled: true }).catch(this.error);
@@ -1300,15 +1323,15 @@ class SkodaVehicleDevice extends Homey.Device {
   async turnOffChargingSelf(): Promise<void> {
     try {
       await this.setCapabilityValue('onoff', false);
-      
+
       // Clear both flags
       this.lowBatteryDeviceEnabled = false;
       this.lowPriceDeviceEnabled = false;
-      await this.setSettings({ 
+      await this.setSettings({
         _low_battery_enabled: false,
         _low_price_enabled: false,
       }).catch(this.error);
-      
+
       this.log('Self onoff turned OFF');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1342,20 +1365,20 @@ class SkodaVehicleDevice extends Homey.Device {
 
     this.log(`[IMAGE] Image URL: ${imageUrl}`);
     this.log(`[IMAGE] Updating device image`);
-    
+
     try {
       // Create an Image instance using Homey SDK 3 Image API
       const myImage = await this.homey.images.createImage();
-      
+
       // Set the image URL
       myImage.setUrl(imageUrl);
-      
+
       // Update the image
       await myImage.update();
-      
+
       // Assign the image to the device as background
       await this.setAlbumArtImage(myImage);
-      
+
       this.log(`[IMAGE] Device background image set successfully with URL: ${imageUrl}`);
     } catch (imageError) {
       const errorMessage = imageError instanceof Error ? imageError.message : String(imageError);
@@ -1371,7 +1394,7 @@ class SkodaVehicleDevice extends Homey.Device {
     try {
       // Try to get image URL from stored settings (from vehicle info endpoint)
       const storedImageUrl = this.getSetting('_vehicle_image_url') as string | undefined;
-      
+
       if (storedImageUrl && typeof storedImageUrl === 'string' && storedImageUrl.length > 0) {
         // Use stored image URL from vehicle info
         await this.updateDeviceImageFromUrl(storedImageUrl);
