@@ -798,7 +798,7 @@ class SkodaVehicleDevice extends Homey.Device {
       const updatedCache = await this.fetchAndUpdatePrices(cache);
 
       // Find cheapest hours
-      const cheapest = this.findCheapestHours(updatedCache, hoursCount);
+      const cheapest = await this.findCheapestHours(updatedCache, hoursCount);
 
       // Always update status display (even if feature is disabled)
       await this.updatePriceStatus(cheapest, timezone);
@@ -1076,7 +1076,7 @@ class SkodaVehicleDevice extends Homey.Device {
       const cache = await this.loadPriceCache();
 
       // Find cheapest hours from cache
-      const cheapest = this.findCheapestHours(cache, hoursCount);
+      const cheapest = await this.findCheapestHours(cache, hoursCount);
 
       // Check if current time is in cheap period
       const now = Date.now();
@@ -1166,9 +1166,46 @@ class SkodaVehicleDevice extends Homey.Device {
 
   /**
    * Find cheapest hours from cache
+   * Caches the result per day to ensure cheapest hours remain fixed for the entire day
    */
-  findCheapestHours(cache: PriceCache, count: number): Array<PriceBlock> {
+  async findCheapestHours(cache: PriceCache, count: number): Promise<Array<PriceBlock>> {
     const now = Date.now();
+    // Use date string in local timezone to match user's day concept
+    const today = new Date();
+    const todayDateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+    // Check if we have cached cheapest hours for today
+    try {
+      const cachedCheapest = await this.getStoreValue('_cheapest_hours_cache');
+      const cachedDate = await this.getStoreValue('_cheapest_hours_date');
+
+      if (cachedCheapest && cachedDate === todayDateString && Array.isArray(cachedCheapest) && cachedCheapest.length > 0) {
+        // Log the cached hours for debugging (show ISO timestamps)
+        const cachedHoursStr = cachedCheapest.map((b: PriceBlock) => {
+          const date = new Date(b.start);
+          return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
+        }).join(', ');
+        this.log(`[LOW_PRICE] Using cached cheapest hours for today (${cachedCheapest.length} hours): ${cachedHoursStr}`);
+        return cachedCheapest as Array<PriceBlock>;
+      }
+
+      // Log why cache wasn't used
+      if (!cachedCheapest) {
+        this.log('[LOW_PRICE] No cached cheapest hours found, will calculate');
+      } else if (cachedDate !== todayDateString) {
+        this.log(`[LOW_PRICE] Cached date (${cachedDate}) doesn't match today (${todayDateString}), will recalculate`);
+      } else if (!Array.isArray(cachedCheapest)) {
+        this.log('[LOW_PRICE] Cached cheapest hours is not an array, will recalculate');
+      } else if (cachedCheapest.length === 0) {
+        this.log('[LOW_PRICE] Cached cheapest hours is empty, will recalculate');
+      }
+    } catch (error) {
+      // If cache read fails, continue to calculate
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log(`[LOW_PRICE] Could not read cached cheapest hours (${errorMessage}), will calculate`);
+    }
+
+    // Calculate cheapest hours from cache
     const todayUTC = new Date().getUTCDate();
     const tomorrowUTC = new Date(now + 86400000).getUTCDate();
 
@@ -1182,6 +1219,22 @@ class SkodaVehicleDevice extends Homey.Device {
     const cheapest = [...relevantBlocks]
       .sort((a, b) => a.price - b.price)
       .slice(0, count);
+
+    // Cache the result for today
+    try {
+      await this.setStoreValue('_cheapest_hours_cache', cheapest);
+      await this.setStoreValue('_cheapest_hours_date', todayDateString);
+
+      // Log the calculated hours for debugging (show ISO timestamps)
+      const hoursStr = cheapest.map((b: PriceBlock) => {
+        const date = new Date(b.start);
+        return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
+      }).join(', ');
+      this.log(`[LOW_PRICE] Calculated and cached cheapest hours for today (${cheapest.length} hours): ${hoursStr}`);
+    } catch (error) {
+      this.error('[LOW_PRICE] Failed to cache cheapest hours:', error);
+      // Continue even if caching fails
+    }
 
     return cheapest;
   }
@@ -1228,9 +1281,21 @@ class SkodaVehicleDevice extends Homey.Device {
   async updatePriceStatus(cheapest: Array<PriceBlock>, timezone: string): Promise<void> {
     try {
       const now = Date.now();
+
+      // Log all cheapest hours with their timestamps for debugging
+      const allHoursDebug = cheapest.map((b: PriceBlock) => {
+        const date = new Date(b.start);
+        const isFuture = b.start > now;
+        return `${date.toISOString()} (${date.toLocaleString('en-US', { timeZone: timezone || 'UTC', hour: '2-digit', minute: '2-digit' })}${isFuture ? ' [FUTURE]' : ' [PAST]'})`;
+      }).join(', ');
+      this.log(`[LOW_PRICE] All cheapest hours (${cheapest.length}): ${allHoursDebug}`);
+      this.log(`[LOW_PRICE] Current time: ${new Date(now).toISOString()}`);
+
       const future = cheapest
         .filter((b) => b.start > now)
         .sort((a, b) => a.start - b.start);
+
+      this.log(`[LOW_PRICE] Future hours after filtering: ${future.length} out of ${cheapest.length}`);
 
       // Auto-detect locale and timezone
       const locale = this.getLocale();
