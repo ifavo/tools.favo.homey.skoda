@@ -4,16 +4,21 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint --ext .js,.ts --ignore-path .gitignore .",
-    "install": "npm run build && homey app install",
-    "update": "npm run build && homey app update",
-    "start": "npm run build && homey app run --remote"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "homey:install": "npm run build && homey app install",
+    "homey:update": "npm run build && homey app update",
+    "homey:start": "npm run build && homey app run --remote"
   },
   "devDependencies": {
     "@tsconfig/node16": "^16.1.8",
     "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",
+    "@types/jest": "^29.5.12",
     "@types/node": "^25.0.2",
     "eslint": "^7.32.0",
     "eslint-config-athom": "^3.1.5",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "typescript": "^5.9.3"
   }
 }

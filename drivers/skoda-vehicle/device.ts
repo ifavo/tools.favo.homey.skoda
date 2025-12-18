@@ -793,12 +793,30 @@ class SkodaVehicleDevice extends Homey.Device {
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
       const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
 
+      // Log configured number of cheapest hours for debugging
+      this.log(`[LOW_PRICE] Configured number of cheapest hours: ${hoursCount}`);
+
       // Always load cache and fetch prices to update display
       const cache = await this.loadPriceCache();
       const updatedCache = await this.fetchAndUpdatePrices(cache);
 
-      // Find cheapest hours
-      const cheapest = await this.findCheapestHours(updatedCache, hoursCount);
+      // DEBUG STEP 1: log current hour cache (raw price data) in a JSON-friendly way
+      try {
+        const cacheArray = Object.values(updatedCache)
+          .sort((a: PriceBlock, b: PriceBlock) => a.start - b.start);
+        const debugCache = cacheArray.map((b: PriceBlock) => ({
+          start: b.start,
+          end: b.end,
+          price: b.price,
+        }));
+        this.log(`[LOW_PRICE_DEBUG] price_cache=${JSON.stringify(debugCache)}`);
+      } catch (debugError) {
+        const errorMessage = debugError instanceof Error ? debugError.message : String(debugError);
+        this.error('[LOW_PRICE_DEBUG] Failed to log price cache:', errorMessage);
+      }
+
+      // Find cheapest hours (recomputed each time from cached price data)
+      const cheapest = this.findCheapestHours(updatedCache, hoursCount);
 
       // Always update status display (even if feature is disabled)
       await this.updatePriceStatus(cheapest, timezone);
@@ -1075,8 +1093,8 @@ class SkodaVehicleDevice extends Homey.Device {
       // Load cache from store (don't fetch - use cached data)
       const cache = await this.loadPriceCache();
 
-      // Find cheapest hours from cache
-      const cheapest = await this.findCheapestHours(cache, hoursCount);
+      // Find cheapest hours from cached price data (recomputed each time)
+      const cheapest = this.findCheapestHours(cache, hoursCount);
 
       // Check if current time is in cheap period
       const now = Date.now();
@@ -1165,47 +1183,13 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Find cheapest hours from cache
-   * Caches the result per day to ensure cheapest hours remain fixed for the entire day
+   * Find cheapest hours from cached price data
+   * - Only the raw price data is cached in `price_cache`
+   * - This function always recalculates the cheapest hours using the current `count`
+   * - This means changing the setting will immediately affect the selected hours
    */
-  async findCheapestHours(cache: PriceCache, count: number): Promise<Array<PriceBlock>> {
+  findCheapestHours(cache: PriceCache, count: number): Array<PriceBlock> {
     const now = Date.now();
-    // Use date string in local timezone to match user's day concept
-    const today = new Date();
-    const todayDateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-    // Check if we have cached cheapest hours for today
-    try {
-      const cachedCheapest = await this.getStoreValue('_cheapest_hours_cache');
-      const cachedDate = await this.getStoreValue('_cheapest_hours_date');
-
-      if (cachedCheapest && cachedDate === todayDateString && Array.isArray(cachedCheapest) && cachedCheapest.length > 0) {
-        // Log the cached hours for debugging (show ISO timestamps)
-        const cachedHoursStr = cachedCheapest.map((b: PriceBlock) => {
-          const date = new Date(b.start);
-          return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
-        }).join(', ');
-        this.log(`[LOW_PRICE] Using cached cheapest hours for today (${cachedCheapest.length} hours): ${cachedHoursStr}`);
-        return cachedCheapest as Array<PriceBlock>;
-      }
-
-      // Log why cache wasn't used
-      if (!cachedCheapest) {
-        this.log('[LOW_PRICE] No cached cheapest hours found, will calculate');
-      } else if (cachedDate !== todayDateString) {
-        this.log(`[LOW_PRICE] Cached date (${cachedDate}) doesn't match today (${todayDateString}), will recalculate`);
-      } else if (!Array.isArray(cachedCheapest)) {
-        this.log('[LOW_PRICE] Cached cheapest hours is not an array, will recalculate');
-      } else if (cachedCheapest.length === 0) {
-        this.log('[LOW_PRICE] Cached cheapest hours is empty, will recalculate');
-      }
-    } catch (error) {
-      // If cache read fails, continue to calculate
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.log(`[LOW_PRICE] Could not read cached cheapest hours (${errorMessage}), will calculate`);
-    }
-
-    // Calculate cheapest hours from cache
     const todayUTC = new Date().getUTCDate();
     const tomorrowUTC = new Date(now + 86400000).getUTCDate();
 
@@ -1220,21 +1204,12 @@ class SkodaVehicleDevice extends Homey.Device {
       .sort((a, b) => a.price - b.price)
       .slice(0, count);
 
-    // Cache the result for today
-    try {
-      await this.setStoreValue('_cheapest_hours_cache', cheapest);
-      await this.setStoreValue('_cheapest_hours_date', todayDateString);
-
-      // Log the calculated hours for debugging (show ISO timestamps)
-      const hoursStr = cheapest.map((b: PriceBlock) => {
-        const date = new Date(b.start);
-        return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
-      }).join(', ');
-      this.log(`[LOW_PRICE] Calculated and cached cheapest hours for today (${cheapest.length} hours): ${hoursStr}`);
-    } catch (error) {
-      this.error('[LOW_PRICE] Failed to cache cheapest hours:', error);
-      // Continue even if caching fails
-    }
+    // Log for debugging
+    const hoursStr = cheapest.map((b: PriceBlock) => {
+      const date = new Date(b.start);
+      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
+    }).join(', ');
+    this.log(`[LOW_PRICE] Computed cheapest hours for count=${count}: ${cheapest.length} hours -> ${hoursStr}`);
 
     return cheapest;
   }
@@ -1276,6 +1251,31 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
+   * Format time for display.
+   * - Uses locale and timezone
+   * - Hides ":00" minutes when they are exactly zero
+   */
+  private formatTime(date: Date, locale: string, timezone: string, options: { ignoreZeroMinutes?: boolean } = { ignoreZeroMinutes: false }): string {
+    const str = date.toLocaleString(locale, {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    // If the string ends with ":00" (e.g. "11:00"), drop the minutes
+    if (options.ignoreZeroMinutes && str.endsWith(':00')) {
+      return str.slice(0, -3);
+    }
+
+    // If it contains ":00 " in the middle (e.g. "11:00 PM"), drop the minutes but keep the suffix
+    if (str.includes(':00 ')) {
+      return str.replace(':00 ', ' ');
+    }
+
+    return str;
+  }
+
+  /**
    * Update status variable with next cheap charging times
    */
   async updatePriceStatus(cheapest: Array<PriceBlock>, timezone: string): Promise<void> {
@@ -1304,29 +1304,53 @@ class SkodaVehicleDevice extends Homey.Device {
       let listString = 'Unknown';
 
       if (future.length > 0) {
-        listString = future
-          .map((b) => {
-            const start = new Date(b.start).toLocaleString(locale, {
-              timeZone: detectedTimezone,
-              hour: '2-digit',
-              minute: '2-digit',
-            });
-            return start;
+        // Group consecutive hourly blocks into ranges
+        const groups: Array<{ start: number; end: number }> = [];
+
+        let currentStart = future[0].start;
+        let currentEnd = future[0].end;
+
+        for (let i = 1; i < future.length; i++) {
+          const block = future[i];
+
+          // If this block starts exactly when the previous one ended, extend the range
+          if (block.start === currentEnd) {
+            currentEnd = block.end;
+          } else {
+            groups.push({ start: currentStart, end: currentEnd });
+            currentStart = block.start;
+            currentEnd = block.end;
+          }
+        }
+
+        // Push last group
+        groups.push({ start: currentStart, end: currentEnd });
+
+        listString = groups
+          .map((g) => {
+            const startDate = new Date(g.start);
+            const endDate = new Date(g.end);
+
+            // If range is exactly one hour (single block), show as single time
+            if (g.end - g.start === 60 * 60 * 1000) {
+              // Single hour: do NOT ignore zero minutes
+              return this.formatTime(startDate, locale, detectedTimezone);
+            }
+
+            // Timeframe: hide :00 on the start, always show full end
+            const startStr = this.formatTime(startDate, locale, detectedTimezone, { ignoreZeroMinutes: true });
+            const endStr = this.formatTime(endDate, locale, detectedTimezone);
+
+            // Otherwise show as range start–end
+            return `${startStr}–${endStr}`;
           })
           .join(', ');
       } else if (cheapest.length > 0) {
         const nextBlock = cheapest[cheapest.length - 1];
         if (nextBlock.start > Date.now()) {
-          const start = new Date(nextBlock.start).toLocaleString(locale, {
-            timeZone: detectedTimezone,
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-          const end = new Date(nextBlock.end).toLocaleString(locale, {
-            timeZone: detectedTimezone,
-            hour: '2-digit',
-            minute: '2-digit',
-          });
+          // Fallback single timeframe: treat as timeframe, so ignoreZeroMinutes only on the start
+          const start = this.formatTime(new Date(nextBlock.start), locale, detectedTimezone, { ignoreZeroMinutes: true });
+          const end = this.formatTime(new Date(nextBlock.end), locale, detectedTimezone);
           listString = `${start}–${end}`;
         }
       }
