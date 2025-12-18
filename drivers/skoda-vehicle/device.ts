@@ -76,7 +76,7 @@ class SkodaVehicleDevice extends Homey.Device {
   private readonly POLL_INTERVAL = 60000; // 60 seconds
   private readonly PRICE_UPDATE_INTERVAL = 15 * 60 * 1000; // 15 minutes
   private readonly INFO_UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours (once per day)
-  private readonly MANUAL_OVERRIDE_DURATION = 60 * 60 * 1000; // 1 hour in milliseconds
+  private readonly MANUAL_OVERRIDE_DURATION = 15 * 60 * 1000; // 15 minutes in milliseconds
   private lowBatteryDeviceEnabled = false; // Track if device was enabled due to low battery
   private lowPriceDeviceEnabled = false; // Track if device was enabled due to low price
 
@@ -886,7 +886,7 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Check if manual control override is still active (within 1 hour)
+   * Check if manual control override is still active (within 15 minutes)
    * Only logs expiration once to avoid spam
    */
   private isManualOverrideActive(): boolean {
@@ -992,7 +992,7 @@ class SkodaVehicleDevice extends Homey.Device {
   /**
    * Check battery level and control charging (self on/off) if configured
    * Low battery takes priority over low price charging
-   * Respects manual override (1 hour after manual control)
+   * Respects manual override (15 minutes after manual control)
    */
   async checkChargingControl(batteryLevel: number): Promise<void> {
     // Check if manual override is still active
@@ -1074,7 +1074,7 @@ class SkodaVehicleDevice extends Homey.Device {
   /**
    * Check low price charging and control device accordingly
    * This uses cached prices (doesn't fetch from API - that's done by the 15-minute interval)
-   * Respects manual override (1 hour after manual control)
+   * Respects manual override (15 minutes after manual control)
    */
   async checkLowPriceCharging(): Promise<void> {
     try {
