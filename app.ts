@@ -2,6 +2,7 @@
 
 import Homey from 'homey';
 import { fetchVehicles, fetchVehicleInfo, BASE_URL } from './logic/skodaApi/apiClient';
+import { extractErrorMessage } from './logic/utils/errorUtils';
 
 interface TokenResponse {
   accessToken: string;
@@ -24,13 +25,12 @@ module.exports = class SkodaApp extends Homey.App {
   async onInit() {
     // Set up global error handlers to prevent crashes
     process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-      const errorMessage = reason instanceof Error ? reason.message : String(reason);
-      this.error('[UNHANDLED] Unhandled promise rejection:', errorMessage);
+      this.error('[UNHANDLED] Unhandled promise rejection:', extractErrorMessage(reason));
       // Don't crash - log and continue
     });
 
     process.on('uncaughtException', (error: Error) => {
-      this.error('[UNHANDLED] Uncaught exception:', error.message);
+      this.error('[UNHANDLED] Uncaught exception:', extractErrorMessage(error));
       // Don't crash - log and continue
     });
 
@@ -41,12 +41,12 @@ module.exports = class SkodaApp extends Homey.App {
       try {
         this.homey.settings.on('set', this.onSettingsChanged.bind(this));
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[INIT] Failed to register settings listener:', errorMessage);
         // Continue initialization even if listener registration fails
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[INIT] Critical error during app initialization:', errorMessage);
       // Don't throw - allow app to continue running
     }
@@ -139,7 +139,7 @@ module.exports = class SkodaApp extends Homey.App {
               await this.homey.settings.set('_token_error', 'Refresh token not configured');
             }
           } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            const errorMessage = extractErrorMessage(error);
             this.error('[SETTINGS] Token test failed:', errorMessage);
             await this.homey.settings.set('_last_access_token', '');
             await this.homey.settings.set('_token_error', errorMessage);
@@ -182,7 +182,7 @@ module.exports = class SkodaApp extends Homey.App {
         accessToken: accessToken
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('Token test failed:', errorMessage);
       return {
         success: false,
@@ -319,7 +319,7 @@ module.exports = class SkodaApp extends Homey.App {
 
       return data.accessToken;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[TOKEN] Error refreshing access token:', errorMessage);
       
       // Store error for display in settings
@@ -416,7 +416,7 @@ module.exports = class SkodaApp extends Homey.App {
       // Try the API call
       return await apiCall(accessToken);
     } catch (error: any) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       const statusCode = error.statusCode || 
         (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
       
@@ -429,7 +429,7 @@ module.exports = class SkodaApp extends Homey.App {
           // Retry the API call with new token (only once to prevent infinite loops)
           return await apiCall(newAccessToken);
         } catch (recoveryError) {
-          const recoveryMessage = recoveryError instanceof Error ? recoveryError.message : String(recoveryError);
+          const recoveryMessage = extractErrorMessage(recoveryError);
           this.error(`[${context}] Failed to recover from 401/403 error:`, recoveryMessage);
           throw new Error(`${context} failed: Authentication recovery failed - ${recoveryMessage}`);
         }

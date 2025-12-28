@@ -34,6 +34,8 @@ import {
   MANUAL_OVERRIDE_DURATION as OVERRIDE_DURATION,
   LOG_INTERVAL,
 } from '../../logic/manualOverride/timing';
+import { getUTCDate, getTodayUTCDate, getTomorrowUTCDate, MILLISECONDS_PER_DAY } from '../../logic/utils/dateUtils';
+import { extractErrorMessage } from '../../logic/utils/errorUtils';
 
 // PriceBlock and PriceCache are imported from logic/lowPrice/types
 
@@ -59,18 +61,47 @@ class SkodaVehicleDevice extends Homey.Device {
   private priceSource!: PriceDataSource; // Initialized in onInit
 
   /**
+   * Resolve VIN from multiple sources (store, data, settings)
+   * Priority: store > data > settings
+   */
+  private resolveVin(): string | undefined {
+    return this.getStoreValue('vin') || this.getData().vin || this.getSetting('vin');
+  }
+
+  /**
+   * Get setting value with default fallback
+   */
+  private getSettingWithDefault<T>(key: string, defaultValue: T): T {
+    return (this.getSetting(key) as T | undefined) ?? defaultValue;
+  }
+
+  /**
+   * Safely update a capability value, logging errors without throwing
+   */
+  private async updateCapabilitySafely(
+    capabilityId: string,
+    value: any,
+    context: string,
+  ): Promise<void> {
+    try {
+      await this.setCapabilityValue(capabilityId, value);
+    } catch (error) {
+      this.error(`[${context}] Failed to update ${capabilityId}:`, error);
+    }
+  }
+
+  /**
    * onInit is called when the device is initialized.
    */
   async onInit() {
     // Set up global error handlers to prevent crashes
     process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
-      const errorMessage = reason instanceof Error ? reason.message : String(reason);
-      this.error('[UNHANDLED] Unhandled promise rejection:', errorMessage);
+      this.error('[UNHANDLED] Unhandled promise rejection:', extractErrorMessage(reason));
       // Don't crash - log and continue
     });
 
     process.on('uncaughtException', (error: Error) => {
-      this.error('[UNHANDLED] Uncaught exception:', error.message);
+      this.error('[UNHANDLED] Uncaught exception:', extractErrorMessage(error));
       // Don't crash - log and continue
     });
 
@@ -79,7 +110,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Ensure VIN is stored from data, store, or settings
       try {
-        const vin = this.getStoreValue('vin') || this.getData().vin || this.getSetting('vin');
+        const vin = this.resolveVin();
         if (vin) {
           await this.setStoreValue('vin', vin);
           await this.setSettings({ vin: vin as string });
@@ -161,7 +192,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log('[INIT] Device initialization completed');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[INIT] Critical error during initialization:', errorMessage);
       // Set device as unavailable but don't throw - allow recovery
       this.setUnavailable(`Initialization error: ${errorMessage.substring(0, 50)}`).catch((setError) => {
@@ -188,7 +219,7 @@ class SkodaVehicleDevice extends Homey.Device {
       const app = this.homey.app as any;
       return await app.getAccessToken();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[TOKEN] Failed to get access token:', errorMessage);
       throw new Error(`Access token error: ${errorMessage}`);
     }
@@ -203,8 +234,7 @@ class SkodaVehicleDevice extends Homey.Device {
       const status = await fetchVehicleStatus(accessToken, vin);
       return status;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.error('[API] Error fetching vehicle status:', errorMessage);
+      this.error('[API] Error fetching vehicle status:', extractErrorMessage(error));
       
       // Check if it's an auth error for logging
       if (isAuthError(error)) {
@@ -222,50 +252,26 @@ class SkodaVehicleDevice extends Homey.Device {
   async updateCapabilities(status: VehicleStatus): Promise<void> {
     try {
       const { status: vehicleStatus, charging } = status;
-      const vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
+      const vin = this.resolveVin();
 
       // Update capabilities with individual error handling - don't let one failure stop others
-      try {
-        const isLocked = extractLockedState(vehicleStatus);
-        await this.setCapabilityValue('locked', isLocked);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update locked:', error);
-      }
+      const isLocked = extractLockedState(vehicleStatus);
+      await this.updateCapabilitySafely('locked', isLocked, 'CAPABILITIES');
 
-      try {
-        const doorsOpen = extractDoorContact(vehicleStatus);
-        await this.setCapabilityValue('alarm_contact.door', doorsOpen);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update door contact:', error);
-      }
+      const doorsOpen = extractDoorContact(vehicleStatus);
+      await this.updateCapabilitySafely('alarm_contact.door', doorsOpen, 'CAPABILITIES');
 
-      try {
-        const trunkOpen = extractTrunkContact(vehicleStatus);
-        await this.setCapabilityValue('alarm_contact.trunk', trunkOpen);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update trunk contact:', error);
-      }
+      const trunkOpen = extractTrunkContact(vehicleStatus);
+      await this.updateCapabilitySafely('alarm_contact.trunk', trunkOpen, 'CAPABILITIES');
 
-      try {
-        const bonnetOpen = extractBonnetContact(vehicleStatus);
-        await this.setCapabilityValue('alarm_contact.bonnet', bonnetOpen);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update bonnet contact:', error);
-      }
+      const bonnetOpen = extractBonnetContact(vehicleStatus);
+      await this.updateCapabilitySafely('alarm_contact.bonnet', bonnetOpen, 'CAPABILITIES');
 
-      try {
-        const windowsOpen = extractWindowContact(vehicleStatus);
-        await this.setCapabilityValue('alarm_contact.window', windowsOpen);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update window contact:', error);
-      }
+      const windowsOpen = extractWindowContact(vehicleStatus);
+      await this.updateCapabilitySafely('alarm_contact.window', windowsOpen, 'CAPABILITIES');
 
-      try {
-        const lightsOn = extractLightContact(vehicleStatus);
-        await this.setCapabilityValue('alarm_contact.light', lightsOn);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update light contact:', error);
-      }
+      const lightsOn = extractLightContact(vehicleStatus);
+      await this.updateCapabilitySafely('alarm_contact.light', lightsOn, 'CAPABILITIES');
 
       // Battery/Charging capabilities
       let batteryLevel = 0;
@@ -276,12 +282,8 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[CAPABILITIES] Failed to update battery:', error);
       }
 
-      try {
-        const rangeKm = extractRemainingRange(charging);
-        await this.setCapabilityValue('measure_distance', rangeKm);
-      } catch (error) {
-        this.error('[CAPABILITIES] Failed to update distance:', error);
-      }
+      const rangeKm = extractRemainingRange(charging);
+      await this.updateCapabilitySafely('measure_distance', rangeKm, 'CAPABILITIES');
 
       try {
         const chargingPower = extractChargingPower(charging);
@@ -342,8 +344,7 @@ class SkodaVehicleDevice extends Homey.Device {
       try {
         await this.checkChargingControl(batteryLevel);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.error('[CAPABILITIES] Failed to check charging control:', errorMessage);
+        this.error('[CAPABILITIES] Failed to check charging control:', extractErrorMessage(error));
         // Don't throw - continue with image update
       }
 
@@ -357,8 +358,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log(`Capabilities updated successfully for VIN: ${vin || 'unknown'}`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.error('[CAPABILITIES] Critical error updating capabilities:', errorMessage);
+      this.error('[CAPABILITIES] Critical error updating capabilities:', extractErrorMessage(error));
       // Don't throw - let the polling interval continue
     }
   }
@@ -391,7 +391,7 @@ class SkodaVehicleDevice extends Homey.Device {
         }
       }
 
-      let vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
+      let vin = this.resolveVin();
 
       // Auto-detect VIN if not stored
       if (!vin) {
@@ -412,7 +412,7 @@ class SkodaVehicleDevice extends Homey.Device {
             throw new Error('No vehicles found and VIN not configured');
           }
         } catch (vinError) {
-          const errorMessage = vinError instanceof Error ? vinError.message : String(vinError);
+          const errorMessage = extractErrorMessage(vinError);
           this.error('[STATUS] Failed to auto-detect VIN:', errorMessage);
           this.setUnavailable(`VIN detection failed: ${errorMessage.substring(0, 50)}`).catch(this.error);
           return; // Exit early, don't throw
@@ -420,19 +420,20 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       // Use central auth recovery for getVehicleStatus
+      // At this point, vin is guaranteed to be defined (checked above)
       let status: VehicleStatus;
       try {
         const app = this.homey.app as any;
         if (app && typeof app.executeWithAuthRecovery === 'function') {
           status = await app.executeWithAuthRecovery(async (token: string) => {
-            return await this.getVehicleStatus(token, vin);
+            return await this.getVehicleStatus(token, vin as string);
           }, 'STATUS');
         } else {
           // Fallback to direct call if recovery function not available
-          status = await this.getVehicleStatus(accessToken, vin);
+          status = await this.getVehicleStatus(accessToken, vin as string);
         }
       } catch (apiError) {
-        const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+        const errorMessage = extractErrorMessage(apiError);
         this.error('[STATUS] Failed to get vehicle status:', errorMessage);
         this.setUnavailable(`Status error: ${errorMessage.substring(0, 50)}`).catch(this.error);
         return; // Exit early
@@ -447,7 +448,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log(`Status refreshed for VIN: ${vin}`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[STATUS] Error refreshing status:', errorMessage);
 
       // Set unavailable but don't throw - allow interval to retry
@@ -470,7 +471,7 @@ class SkodaVehicleDevice extends Homey.Device {
       await this.refreshStatus();
       await this.setAvailable();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[POLLING] Initial status refresh failed:', errorMessage);
       // Don't throw - continue to set up interval
     }
@@ -478,7 +479,7 @@ class SkodaVehicleDevice extends Homey.Device {
     // Set up interval with comprehensive error handling
     this.pollingInterval = this.homey.setInterval(() => {
       this.refreshStatus().catch((error) => {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[POLLING] Status refresh failed:', errorMessage);
         // Don't crash - interval will retry on next cycle
         // Set device as unavailable if error persists
@@ -512,7 +513,7 @@ class SkodaVehicleDevice extends Homey.Device {
     try {
       await this.updatePricesAndCheckCharging();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[LOW_PRICE] Initial price update failed:', errorMessage);
       // Set capability value to show error message
       try {
@@ -527,7 +528,7 @@ class SkodaVehicleDevice extends Homey.Device {
     // Set up interval with comprehensive error handling
     this.priceUpdateInterval = this.homey.setInterval(() => {
       this.updatePricesAndCheckCharging().catch((error) => {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[LOW_PRICE] Price update failed:', errorMessage);
         // Don't crash - interval will retry on next cycle
       });
@@ -564,7 +565,7 @@ class SkodaVehicleDevice extends Homey.Device {
         try {
           await this.refreshVehicleInfo();
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage = extractErrorMessage(error);
           this.error('[INFO] Initial vehicle info fetch failed:', errorMessage);
           // Don't throw - continue to set up interval
         }
@@ -580,7 +581,7 @@ class SkodaVehicleDevice extends Homey.Device {
     // Set up interval for daily info updates with error handling
     this.infoUpdateInterval = this.homey.setInterval(() => {
       this.refreshVehicleInfo().catch((error) => {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[INFO] Vehicle info refresh failed:', errorMessage);
         // Don't crash - interval will retry on next cycle
       });
@@ -605,7 +606,7 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async refreshVehicleInfo(): Promise<void> {
     try {
-      const vin = this.getStoreValue('vin') || this.getSetting('vin') || this.getData().vin;
+      const vin = this.resolveVin();
       if (!vin) {
         this.log('[INFO] VIN not available, skipping vehicle info fetch');
         return;
@@ -617,7 +618,7 @@ class SkodaVehicleDevice extends Homey.Device {
       try {
         accessToken = await this.getAccessToken();
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[INFO] Failed to get access token for vehicle info:', errorMessage);
         throw error; // Re-throw - can't proceed without token
       }
@@ -635,7 +636,7 @@ class SkodaVehicleDevice extends Homey.Device {
           info = await app.getVehicleInfo(accessToken, vin);
         }
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[INFO] Failed to fetch vehicle info from API:', errorMessage);
         throw error; // Re-throw - can't proceed without info
       }
@@ -717,7 +718,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log('[INFO] Vehicle info refreshed successfully');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[INFO] Failed to refresh vehicle info:', errorMessage);
       // Don't throw - info update failure shouldn't break device operation
     }
@@ -732,8 +733,8 @@ class SkodaVehicleDevice extends Homey.Device {
       this.log('[LOW_PRICE] Updating prices from price data source');
 
       // Auto-detect timezone if not configured, fallback to Homey's timezone
-      const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
-      const blocksCount = (this.getSetting('low_price_blocks_count') as number) || 8;
+      const timezone = this.getSettingWithDefault('price_timezone', this.getTimezone());
+      const blocksCount = this.getSettingWithDefault('low_price_blocks_count', 8);
 
       // Log configured number of cheapest blocks for debugging
       this.log(`[LOW_PRICE] Configured number of cheapest blocks: ${blocksCount}`);
@@ -795,7 +796,7 @@ class SkodaVehicleDevice extends Homey.Device {
       // noChange - decision logic already handled the reason
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[LOW_PRICE] Error in price update:', errorMessage);
       // Update capability to show error
       try {
@@ -815,7 +816,7 @@ class SkodaVehicleDevice extends Homey.Device {
       // Note: The API might support lock/unlock commands, but that's not in the provided code
       // For now, this is read-only, but we keep the listener for future implementation
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[LOCKED] Error handling locked capability change:', errorMessage);
       // Don't throw - capability listener errors shouldn't crash the device
     }
@@ -915,7 +916,7 @@ class SkodaVehicleDevice extends Homey.Device {
       }
       // The capability value is already set by Homey, we just log and clear flags
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[ONOFF] Error handling onoff capability change:', errorMessage);
       // Don't throw - capability listener errors shouldn't crash the device
     }
@@ -1016,9 +1017,9 @@ class SkodaVehicleDevice extends Homey.Device {
         return;
       }
 
-      const blocksCount = (this.getSetting('low_price_blocks_count') as number) || 8;
+      const blocksCount = this.getSettingWithDefault('low_price_blocks_count', 8);
       // Auto-detect timezone if not configured, fallback to Homey's timezone
-      const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
+      const timezone = this.getSettingWithDefault('price_timezone', this.getTimezone());
 
       this.log(`[LOW_PRICE] Checking low price charging (cheapest ${blocksCount} blocks)`);
 
@@ -1057,7 +1058,7 @@ class SkodaVehicleDevice extends Homey.Device {
       await this.updatePriceStatus(cheapest, timezone);
 
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[LOW_PRICE] Error in low price charging:', errorMessage);
     }
   }
@@ -1090,7 +1091,7 @@ class SkodaVehicleDevice extends Homey.Device {
       } catch (error) {
         // If Tibber fails and we're using Tibber, fall back to SMARD
         if (this.priceSource instanceof TibberPriceSource) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorMessage = extractErrorMessage(error);
           this.log(
             `[LOW_PRICE] Tibber API failed (${errorMessage}), falling back to SMARD API`,
           );
@@ -1168,7 +1169,7 @@ class SkodaVehicleDevice extends Homey.Device {
       );
       return cache;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error(`[LOW_PRICE] Failed to fetch prices:`, errorMessage);
       return cache; // Return existing cache on error
     }
@@ -1194,9 +1195,9 @@ class SkodaVehicleDevice extends Homey.Device {
     const now = Date.now();
     const allBlocks = Object.values(cache);
     const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-      const todayUTC = new Date(now).getUTCDate();
-      const tomorrowUTC = new Date(now + 86400000).getUTCDate();
-      const d = new Date(b.start).getUTCDate();
+      const todayUTC = getTodayUTCDate(now);
+      const tomorrowUTC = getTomorrowUTCDate(now);
+      const d = getUTCDate(b.start);
       return d === todayUTC || d === tomorrowUTC;
     }) as Array<PriceBlock>;
 
@@ -1335,7 +1336,7 @@ class SkodaVehicleDevice extends Homey.Device {
         await this.setCapabilityValue('next_charging_times', listString);
         this.log(`[LOW_PRICE] Next charging times capability updated: ${listString}`);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = extractErrorMessage(error);
         this.error('[LOW_PRICE] Could not set next_charging_times capability:', errorMessage);
         // If capability doesn't exist, log it but don't fail
         if (errorMessage.includes('not found') || errorMessage.includes('does not exist') || errorMessage.includes('not registered')) {
@@ -1345,7 +1346,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log(`[LOW_PRICE] Next charging times: ${listString}`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error(`[LOW_PRICE] Failed to update status:`, errorMessage);
       // Try to update capability with error message
       try {
@@ -1373,7 +1374,7 @@ class SkodaVehicleDevice extends Homey.Device {
         this.log('[LOW_PRICE] Self onoff turned ON (low price)');
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('Failed to turn on self onoff:', errorMessage);
     }
   }
@@ -1395,7 +1396,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       this.log('Self onoff turned OFF');
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('Failed to turn off self onoff:', errorMessage);
     }
   }
@@ -1470,7 +1471,7 @@ class SkodaVehicleDevice extends Homey.Device {
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = extractErrorMessage(error);
       this.error('[IMAGE] Failed to update device image:', errorMessage);
       // Don't throw - image update failure shouldn't break status updates
     }

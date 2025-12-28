@@ -1,4 +1,5 @@
 import type { PriceBlock, PriceCache } from '../logic/lowPrice/types';
+import { getUTCDate, getTodayUTCDate, getTomorrowUTCDate } from '../logic/utils/dateUtils';
 
 /**
  * Helper function to find cheapest blocks with today/tomorrow logic (matching device.ts)
@@ -8,12 +9,12 @@ function findCheapestBlocksWithTodayTomorrow(
   count: number,
   now: number = Date.now(),
 ): Array<PriceBlock> {
-  const todayUTC = new Date(now).getUTCDate();
-  const tomorrowUTC = new Date(now + 86400000).getUTCDate();
+  const todayUTC = getTodayUTCDate(now);
+  const tomorrowUTC = getTomorrowUTCDate(now);
 
   // Filter relevant blocks (today and tomorrow)
   const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-    const d = new Date(b.start).getUTCDate();
+    const d = getUTCDate(b.start);
     return d === todayUTC || d === tomorrowUTC;
   }) as Array<PriceBlock>;
 
@@ -23,7 +24,7 @@ function findCheapestBlocksWithTodayTomorrow(
 
   // Step 1: Find cheapest blocks for TODAY (including past ones)
   const todayBlocks = relevantBlocks.filter((b: PriceBlock) => {
-    const d = new Date(b.start).getUTCDate();
+    const d = getUTCDate(b.start);
     return d === todayUTC;
   });
   const sortedTodayByPrice = [...todayBlocks].sort((a, b) => a.price - b.price);
@@ -35,7 +36,7 @@ function findCheapestBlocksWithTodayTomorrow(
   // Step 2: If no future blocks from today, find cheapest blocks for TOMORROW
   if (cheapest.length === 0) {
     const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => {
-      const d = new Date(b.start).getUTCDate();
+      const d = getUTCDate(b.start);
       return d === tomorrowUTC && b.start > now;
     });
     const sortedTomorrowByPrice = [...tomorrowBlocks].sort((a, b) => a.price - b.price);
@@ -87,9 +88,8 @@ describe('block identification (today vs tomorrow, future vs past)', () => {
     // Should find blocks from today (future blocks)
     expect(cheapest.length).toBeGreaterThan(0);
     const firstBlock = cheapest[0];
-    const blockDate = new Date(firstBlock.start);
-    const todayUTC = new Date(now).getUTCDate();
-    expect(blockDate.getUTCDate()).toBe(todayUTC);
+    const todayUTC = getTodayUTCDate(now);
+    expect(getUTCDate(firstBlock.start)).toBe(todayUTC);
     expect(firstBlock.start).toBeGreaterThan(now); // All should be future
   });
 
@@ -103,9 +103,8 @@ describe('block identification (today vs tomorrow, future vs past)', () => {
     // Should find blocks from tomorrow since all today blocks are in past
     expect(cheapest.length).toBeGreaterThan(0);
     const firstBlock = cheapest[0];
-    const blockDate = new Date(firstBlock.start);
-    const tomorrowUTC = new Date(now + 86400000).getUTCDate();
-    expect(blockDate.getUTCDate()).toBe(tomorrowUTC);
+    const tomorrowUTC = getTomorrowUTCDate(now);
+    expect(getUTCDate(firstBlock.start)).toBe(tomorrowUTC);
     expect(firstBlock.start).toBeGreaterThan(now); // All should be future
   });
 

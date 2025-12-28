@@ -95,11 +95,15 @@ export function extractChargingPower(charging: VehicleStatus['charging']): numbe
 }
 
 /**
+ * Charging states that indicate active charging
+ */
+const CHARGING_STATES = ['CHARGING', 'CHARGING_AC', 'CHARGING_DC'] as const;
+
+/**
  * Extract charging state (on/off) from charging status
  */
 export function extractChargingState(charging: VehicleStatus['charging']): boolean {
-  const state = charging.status.state;
-  return state === 'CHARGING' || state === 'CHARGING_AC' || state === 'CHARGING_DC';
+  return CHARGING_STATES.includes(charging.status.state as typeof CHARGING_STATES[number]);
 }
 
 /**

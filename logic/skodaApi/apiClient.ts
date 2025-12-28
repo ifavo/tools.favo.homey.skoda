@@ -96,9 +96,9 @@ export function buildChargingUrl(vin: string): string {
  * Build garage URL for listing vehicles
  */
 export function buildGarageUrl(): string {
-  return `${BASE_URL}/api/v2/garage?connectivityGenerations=MOD1`
-    + '&connectivityGenerations=MOD2&connectivityGenerations=MOD3'
-    + '&connectivityGenerations=MOD4';
+  const generations = ['MOD1', 'MOD2', 'MOD3', 'MOD4'];
+  const params = generations.map((gen) => `connectivityGenerations=${gen}`).join('&');
+  return `${BASE_URL}/api/v2/garage?${params}`;
 }
 
 /**
@@ -116,6 +116,13 @@ export function createAuthHeaders(accessToken: string): Record<string, string> {
     Authorization: `Bearer ${accessToken}`,
     'Content-Type': 'application/json',
   };
+}
+
+/**
+ * Extract error message from error object or value
+ */
+export function extractErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -155,6 +162,19 @@ export function truncateErrorMessage(message: string, maxLength: number = 200): 
 }
 
 /**
+ * Check response and throw API error if not ok
+ */
+async function checkResponseAndThrow(
+  response: Response,
+  errorMessage: string,
+): Promise<void> {
+  if (!response.ok) {
+    const text = await parseErrorResponse(response);
+    throw createApiError(errorMessage, response.status, text);
+  }
+}
+
+/**
  * Create API error with status code
  */
 export function createApiError(
@@ -163,9 +183,8 @@ export function createApiError(
   responseText?: string,
 ): ApiError {
   const errorText = responseText ? truncateErrorMessage(responseText) : '';
-  const fullMessage = statusCode
-    ? `${message} ${statusCode}: ${errorText}`
-    : `${message}: ${errorText || 'Unknown error'}`;
+  const errorDetail = errorText || 'Unknown error';
+  const fullMessage = statusCode ? `${message} ${statusCode}: ${errorText}` : `${message}: ${errorDetail}`;
   const error = new Error(fullMessage) as ApiError;
   if (statusCode) {
     error.statusCode = statusCode;
@@ -200,19 +219,11 @@ export async function fetchVehicleStatus(
       }),
     ]);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`Network error: ${errorMessage}`);
+    throw new Error(`Network error: ${extractErrorMessage(error)}`);
   }
 
-  if (!statusResponse.ok) {
-    const text = await parseErrorResponse(statusResponse);
-    throw createApiError('Get status failed', statusResponse.status, text);
-  }
-
-  if (!chargingResponse.ok) {
-    const text = await parseErrorResponse(chargingResponse);
-    throw createApiError('Get charging status failed', chargingResponse.status, text);
-  }
+  await checkResponseAndThrow(statusResponse, 'Get status failed');
+  await checkResponseAndThrow(chargingResponse, 'Get charging status failed');
 
   try {
     const status = await statusResponse.json() as VehicleStatus['status'];
@@ -224,8 +235,7 @@ export async function fetchVehicleStatus(
       timestamp: new Date().toISOString(),
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(`JSON parse error: ${errorMessage}`);
+    throw new Error(`JSON parse error: ${extractErrorMessage(error)}`);
   }
 }
 
@@ -244,10 +254,7 @@ export async function fetchVehicles(
     headers,
   });
 
-  if (!response.ok) {
-    const text = await parseErrorResponse(response);
-    throw createApiError('List vehicles failed', response.status, text);
-  }
+  await checkResponseAndThrow(response, 'List vehicles failed');
 
   const data = await response.json() as { vehicles?: Vehicle[] };
   return data.vehicles || [];
@@ -269,10 +276,7 @@ export async function fetchVehicleInfo(
     headers,
   });
 
-  if (!response.ok) {
-    const text = await parseErrorResponse(response);
-    throw createApiError('Get vehicle info failed', response.status, text);
-  }
+  await checkResponseAndThrow(response, 'Get vehicle info failed');
 
   const data = await response.json() as {
     name?: string;

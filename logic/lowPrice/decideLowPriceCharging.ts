@@ -34,13 +34,13 @@ export function decideLowPriceCharging(
   // Check if current time is in cheap period
   const isCheapNow = cheapest.some((b: PriceBlock) => now >= b.start && now < b.end);
 
-  // Low battery takes priority
-  if (
-    lowBatteryThreshold != null &&
-    batteryLevel != null &&
-    lowBatteryThreshold > 0 &&
-    batteryLevel < lowBatteryThreshold
-  ) {
+  // Low battery takes priority - check if battery is below threshold
+  const isLowBattery = lowBatteryThreshold != null
+    && batteryLevel != null
+    && lowBatteryThreshold > 0
+    && batteryLevel < lowBatteryThreshold;
+
+  if (isLowBattery) {
     return 'noChange';
   }
 
@@ -59,8 +59,3 @@ export function decideLowPriceCharging(
 
   return 'noChange';
 }
-
-
-
-
-
