@@ -1157,7 +1157,22 @@ class SkodaVehicleDevice extends Homey.Device {
   async fetchAndUpdatePrices(cache: PriceCache): Promise<PriceCache> {
     try {
       // Fetch price data from the configured source
-      const priceData = await this.priceSource.fetch();
+      let priceData;
+      try {
+        priceData = await this.priceSource.fetch();
+      } catch (error) {
+        // If Tibber fails and we're using Tibber, fall back to SMARD
+        if (this.priceSource instanceof TibberPriceSource) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.log(
+            `[LOW_PRICE] Tibber API failed (${errorMessage}), falling back to SMARD API`,
+          );
+          this.priceSource = new SmardPriceSource('DE-LU');
+          priceData = await this.priceSource.fetch();
+        } else {
+          throw error;
+        }
+      }
 
       // Update cache with new prices
       // Each entry is a 15-minute block
@@ -1261,37 +1276,75 @@ class SkodaVehicleDevice extends Homey.Device {
       return d === todayUTC || d === tomorrowUTC;
     }) as Array<PriceBlock>;
 
+    // Log cache statistics for debugging
+    const allBlocks = Object.values(cache);
+    const pastBlocks = relevantBlocks.filter((b) => b.start <= now);
+    const futureBlocks = relevantBlocks.filter((b) => b.start > now);
+    this.log(
+      `[LOW_PRICE] Cache stats: ${allBlocks.length} total blocks, ${relevantBlocks.length} relevant (today/tomorrow), ${pastBlocks.length} past, ${futureBlocks.length} future`,
+    );
+    if (relevantBlocks.length > 0) {
+      const sortedRelevant = [...relevantBlocks].sort((a, b) => a.price - b.price);
+      const cheapest5 = sortedRelevant.slice(0, 5).map((b: PriceBlock) => {
+        const date = new Date(b.start);
+        const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
+        return `${date.toISOString()} (${b.price.toFixed(5)})${isPast}`;
+      }).join(', ');
+      this.log(`[LOW_PRICE] Top 5 cheapest relevant blocks: ${cheapest5}`);
+    }
+
     if (relevantBlocks.length === 0 || count <= 0) {
       return [];
     }
 
-    // Sort by price to find cheapest individual blocks
-    const sortedByPrice = [...relevantBlocks].sort((a, b) => a.price - b.price);
+    // Step 1: Find cheapest blocks for TODAY (including past ones)
+    const todayBlocks = relevantBlocks.filter((b: PriceBlock) => {
+      const d = new Date(b.start).getUTCDate();
+      return d === todayUTC;
+    });
+    const sortedTodayByPrice = [...todayBlocks].sort((a, b) => a.price - b.price);
+    const cheapestToday = sortedTodayByPrice.slice(0, count);
 
-    // First, try to find cheapest blocks overall
-    let cheapest = sortedByPrice.slice(0, count);
+    // Filter to only future blocks from today's cheapest
+    let cheapest = cheapestToday.filter((b) => b.start > now);
 
-    // Check if all cheapest blocks are in the past
-    const allPast = cheapest.every((b) => b.start <= now);
+    // Log today's cheapest blocks for debugging
+    const cheapestTodayDebug = cheapestToday.map((b: PriceBlock) => {
+      const date = new Date(b.start);
+      const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
+      return `${date.toISOString()} (price: ${b.price.toFixed(5)})${isPast}`;
+    }).join(', ');
+    this.log(
+      `[LOW_PRICE] Cheapest ${count} blocks for today (including past): ${cheapestTodayDebug}`,
+    );
+    this.log(
+      `[LOW_PRICE] Future blocks from today's cheapest: ${cheapest.length} out of ${cheapestToday.length}`,
+    );
 
-    // If all cheapest blocks are in the past, find cheapest future blocks instead
-    if (allPast) {
-      const futureBlocks = relevantBlocks.filter((b) => b.start > now);
-      if (futureBlocks.length >= count) {
-        const sortedFutureByPrice = [...futureBlocks].sort((a, b) => a.price - b.price);
-        cheapest = sortedFutureByPrice.slice(0, count);
-        this.log(`[LOW_PRICE] All cheapest blocks were in the past, using cheapest future blocks instead`);
-      }
+    // Step 2: If no future blocks from today, find cheapest blocks for TOMORROW
+    if (cheapest.length === 0) {
+      this.log(
+        `[LOW_PRICE] No future blocks from today's cheapest, finding cheapest blocks for tomorrow`,
+      );
+      const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => {
+        const d = new Date(b.start).getUTCDate();
+        return d === tomorrowUTC && b.start > now;
+      });
+      const sortedTomorrowByPrice = [...tomorrowBlocks].sort((a, b) => a.price - b.price);
+      cheapest = sortedTomorrowByPrice.slice(0, count);
+      this.log(
+        `[LOW_PRICE] Found ${cheapest.length} cheapest future blocks from tomorrow (out of ${tomorrowBlocks.length} available)`,
+      );
     }
 
     // Sort result by time for consistent ordering
     cheapest.sort((a, b) => a.start - b.start);
 
-    // Log for debugging
+    // Log for debugging with prices
     const blocksStr = cheapest.map((b: PriceBlock) => {
       const date = new Date(b.start);
       const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
-      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})${isPast}`;
+      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, price: ${b.price.toFixed(5)})${isPast}`;
     }).join(', ');
     const totalPrice = cheapest.reduce((sum, b) => sum + b.price, 0);
     this.log(`[LOW_PRICE] Computed cheapest blocks for count=${count}: ${cheapest.length} blocks (total: ${totalPrice.toFixed(4)} €/kWh) -> ${blocksStr}`);

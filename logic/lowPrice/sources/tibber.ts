@@ -85,16 +85,6 @@ export class TibberPriceSource implements PriceDataSource {
 
     // Process today's prices
     if (priceInfo.today) {
-      // Log first and last entries from today to verify format
-      if (priceInfo.today.length > 0) {
-        const firstToday = priceInfo.today[0];
-        const lastToday = priceInfo.today[priceInfo.today.length - 1];
-        console.log('[TIBBER] Today first entry:', JSON.stringify(firstToday));
-        console.log('[TIBBER] Today last entry:', JSON.stringify(lastToday));
-        console.log('[TIBBER] Today last entry parsed:', new Date(lastToday.startsAt).toISOString());
-        console.log('[TIBBER] Today last entry local (Europe/Berlin):', new Date(lastToday.startsAt).toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
-      }
-
       for (const { startsAt, total } of priceInfo.today) {
         entries.push({
           date: startsAt,
@@ -105,14 +95,6 @@ export class TibberPriceSource implements PriceDataSource {
 
     // Process tomorrow's prices
     if (priceInfo.tomorrow) {
-      // Log first entry from tomorrow to verify format
-      if (priceInfo.tomorrow.length > 0) {
-        const firstTomorrow = priceInfo.tomorrow[0];
-        console.log('[TIBBER] Tomorrow first entry:', JSON.stringify(firstTomorrow));
-        console.log('[TIBBER] Tomorrow first entry parsed:', new Date(firstTomorrow.startsAt).toISOString());
-        console.log('[TIBBER] Tomorrow first entry local (Europe/Berlin):', new Date(firstTomorrow.startsAt).toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
-      }
-
       for (const { startsAt, total } of priceInfo.tomorrow) {
         entries.push({
           date: startsAt,

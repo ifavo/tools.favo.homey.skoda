@@ -90,52 +90,11 @@ export class SmardPriceSource implements PriceDataSource {
           continue;
         }
 
-        // SMARD timestamps appear to represent local time (Europe/Berlin) stored as UTC.
-        // If timestampMs represents "22:45" in Berlin but is stored as "22:45 UTC",
-        // when displayed in Berlin it shows as "23:45" (UTC+1 in winter, UTC+2 in summer).
-        //
-        // Solution: Calculate the timezone offset for Europe/Berlin at this timestamp,
-        // then subtract it to get the correct UTC timestamp.
+        // SMARD timestamps are already correct UTC timestamps.
+        // They represent the actual UTC time, not Berlin local time stored as UTC.
+        // No conversion needed - use the timestamp directly.
         const dateFromTimestamp = new Date(timestampMs);
-
-        // Get what this timestamp represents in Berlin vs UTC
-        const berlinTime = dateFromTimestamp.toLocaleString('en-US', {
-          timeZone: 'Europe/Berlin',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-        const utcTime = dateFromTimestamp.toLocaleString('en-US', {
-          timeZone: 'UTC',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-        });
-
-        // Parse times to get hour difference
-        // Format: "MM/DD/YYYY, HH:mm:ss"
-        const berlinHour = parseInt(berlinTime.split(', ')[1].split(':')[0], 10);
-        const utcHour = parseInt(utcTime.split(', ')[1].split(':')[0], 10);
-
-        // Calculate offset (can be 1 or 2 hours depending on DST)
-        let hourDiff = berlinHour - utcHour;
-        // Handle day rollover
-        if (hourDiff > 12) hourDiff -= 24;
-        if (hourDiff < -12) hourDiff += 24;
-
-        // Adjust timestamp: subtract the offset to convert Berlin local to UTC
-        const offsetMs = hourDiff * 60 * 60 * 1000;
-        const adjustedTimestamp = timestampMs - offsetMs;
-        const adjustedDate = new Date(adjustedTimestamp);
-        const isoString = adjustedDate.toISOString();
+        const isoString = dateFromTimestamp.toISOString();
 
         // Convert price from €/MWh to €/kWh (divide by 1000)
         const pricePerKwh = pricePerMwh / 1000;

@@ -1,0 +1,44 @@
+{
+  "data": {
+    "viewer": {
+      "homes": [
+        {
+          "currentSubscription": {
+            "priceInfo": {
+              "today": [
+                {
+                  "startsAt": "2025-12-28T00:00:00+01:00",
+                  "total": 0.0773,
+                  "currency": "EUR"
+                },
+                {
+                  "startsAt": "2025-12-28T00:15:00+01:00",
+                  "total": 0.0791,
+                  "currency": "EUR"
+                },
+                {
+                  "startsAt": "2025-12-28T00:30:00+01:00",
+                  "total": 0.0855,
+                  "currency": "EUR"
+                }
+              ],
+              "tomorrow": [
+                {
+                  "startsAt": "2025-12-29T00:00:00+01:00",
+                  "total": 0.0745,
+                  "currency": "EUR"
+                },
+                {
+                  "startsAt": "2025-12-29T00:15:00+01:00",
+                  "total": 0.0762,
+                  "currency": "EUR"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
