@@ -6,56 +6,34 @@ import { TibberPriceSource } from '../../logic/lowPrice/sources/tibber';
 import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { formatNextChargingTimes } from '../../logic/lowPrice/formatNextChargingTimes';
-
-const BASE_URL = 'https://mysmob.api.connect.skoda-auto.cz';
-
-interface VehicleStatus {
-  status: {
-    overall: {
-      doorsLocked: string;
-      locked: string;
-      doors: string;
-      windows: string;
-      lights: string;
-      reliableLockStatus: string;
-    };
-    detail: {
-      sunroof: string;
-      trunk: string;
-      bonnet: string;
-    };
-    renders?: {
-      lightMode?: {
-        oneX?: string;
-      };
-    };
-    carCapturedTimestamp: string;
-  };
-  charging: {
-    status: {
-      chargingRateInKilometersPerHour: number;
-      chargePowerInKw: number;
-      remainingTimeToFullyChargedInMinutes: number;
-      state: string;
-      battery: {
-        remainingCruisingRangeInMeters: number;
-        stateOfChargeInPercent: number;
-      };
-    };
-    settings: {
-      targetStateOfChargeInPercent: number;
-      batteryCareModeTargetValueInPercent: number;
-      preferredChargeMode: string;
-      availableChargeModes: string[];
-      chargingCareMode: string;
-      autoUnlockPlugWhenCharged: string;
-      maxChargeCurrentAc: string;
-    };
-    carCapturedTimestamp: string;
-    errors: unknown[];
-  };
-  timestamp: string;
-}
+import { findCheapestBlocks } from '../../logic/lowPrice/findCheapestHours';
+import { decideLowPriceCharging, type ChargingDecision } from '../../logic/lowPrice/decideLowPriceCharging';
+import {
+  fetchVehicleStatus,
+  type VehicleStatus,
+  isAuthError,
+} from '../../logic/skodaApi/apiClient';
+import {
+  extractLockedState,
+  extractDoorContact,
+  extractTrunkContact,
+  extractBonnetContact,
+  extractWindowContact,
+  extractLightContact,
+  extractBatteryLevel,
+  extractRemainingRange,
+  extractChargingPower,
+  extractChargingState,
+} from '../../logic/vehicleStatus/capabilityMapping';
+import {
+  isManualOverrideActive as checkManualOverrideActive,
+  calculateRemainingMinutes,
+  shouldLogRemainingTime,
+  shouldLogExpiration,
+  calculateExpirationTime,
+  MANUAL_OVERRIDE_DURATION as OVERRIDE_DURATION,
+  LOG_INTERVAL,
+} from '../../logic/manualOverride/timing';
 
 // PriceBlock and PriceCache are imported from logic/lowPrice/types
 
@@ -75,7 +53,7 @@ class SkodaVehicleDevice extends Homey.Device {
   private readonly POLL_INTERVAL = 60000; // 60 seconds
   private readonly PRICE_UPDATE_INTERVAL = 15 * 60 * 1000; // 15 minutes
   private readonly INFO_UPDATE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours (once per day)
-  private readonly MANUAL_OVERRIDE_DURATION = 15 * 60 * 1000; // 15 minutes in milliseconds
+  private readonly MANUAL_OVERRIDE_DURATION = OVERRIDE_DURATION; // 15 minutes in milliseconds
   private lowBatteryDeviceEnabled = false; // Track if device was enabled due to low battery
   private lowPriceDeviceEnabled = false; // Track if device was enabled due to low price
   private priceSource!: PriceDataSource; // Initialized in onInit
@@ -221,68 +199,20 @@ class SkodaVehicleDevice extends Homey.Device {
    * Throws errors with status codes included in message for 401/403 detection
    */
   async getVehicleStatus(accessToken: string, vin: string): Promise<VehicleStatus> {
-    const statusUrl = `${BASE_URL}/api/v2/vehicle-status/${vin}`;
-    const chargingUrl = `${BASE_URL}/api/v1/charging/${vin}`;
-
-    let statusResponse: Response;
-    let chargingResponse: Response;
-
     try {
-      [statusResponse, chargingResponse] = await Promise.all([
-        fetch(statusUrl, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }),
-        fetch(chargingUrl, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        }),
-      ]);
+      const status = await fetchVehicleStatus(accessToken, vin);
+      return status;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.error('[API] Network error fetching vehicle status:', errorMessage);
-      throw new Error(`Network error: ${errorMessage}`);
-    }
-
-    if (!statusResponse.ok) {
-      const text = await statusResponse.text().catch(() => 'Unable to read error response');
-      const errorMsg = `Get status failed ${statusResponse.status}: ${text.substring(0, 200)}`;
-      this.error(`[API] ${errorMsg}`);
-      // Include status code in error message for detection
-      const error = new Error(errorMsg);
-      (error as any).statusCode = statusResponse.status;
+      this.error('[API] Error fetching vehicle status:', errorMessage);
+      
+      // Check if it's an auth error for logging
+      if (isAuthError(error)) {
+        this.error('[API] Authentication error detected (401/403)');
+      }
+      
+      // Re-throw the error to preserve status codes
       throw error;
-    }
-
-    if (!chargingResponse.ok) {
-      const text = await chargingResponse.text().catch(() => 'Unable to read error response');
-      const errorMsg = `Get charging status failed ${chargingResponse.status}: ${text.substring(0, 200)}`;
-      this.error(`[API] ${errorMsg}`);
-      // Include status code in error message for detection
-      const error = new Error(errorMsg);
-      (error as any).statusCode = chargingResponse.status;
-      throw error;
-    }
-
-    try {
-      const status = await statusResponse.json() as VehicleStatus['status'];
-      const charging = await chargingResponse.json() as VehicleStatus['charging'];
-
-      return {
-        status,
-        charging,
-        timestamp: new Date().toISOString(),
-      };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.error('[API] Failed to parse vehicle status JSON:', errorMessage);
-      throw new Error(`JSON parse error: ${errorMessage}`);
     }
   }
 
@@ -296,43 +226,42 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Update capabilities with individual error handling - don't let one failure stop others
       try {
-        const isLocked = vehicleStatus.overall.locked === 'YES' ||
-          vehicleStatus.overall.reliableLockStatus === 'LOCKED';
+        const isLocked = extractLockedState(vehicleStatus);
         await this.setCapabilityValue('locked', isLocked);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update locked:', error);
       }
 
       try {
-        const doorsOpen = vehicleStatus.overall.doors === 'OPEN';
+        const doorsOpen = extractDoorContact(vehicleStatus);
         await this.setCapabilityValue('alarm_contact.door', doorsOpen);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update door contact:', error);
       }
 
       try {
-        const trunkOpen = vehicleStatus.detail.trunk === 'OPEN';
+        const trunkOpen = extractTrunkContact(vehicleStatus);
         await this.setCapabilityValue('alarm_contact.trunk', trunkOpen);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update trunk contact:', error);
       }
 
       try {
-        const bonnetOpen = vehicleStatus.detail.bonnet === 'OPEN';
+        const bonnetOpen = extractBonnetContact(vehicleStatus);
         await this.setCapabilityValue('alarm_contact.bonnet', bonnetOpen);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update bonnet contact:', error);
       }
 
       try {
-        const windowsOpen = vehicleStatus.overall.windows === 'OPEN';
+        const windowsOpen = extractWindowContact(vehicleStatus);
         await this.setCapabilityValue('alarm_contact.window', windowsOpen);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update window contact:', error);
       }
 
       try {
-        const lightsOn = vehicleStatus.overall.lights === 'ON';
+        const lightsOn = extractLightContact(vehicleStatus);
         await this.setCapabilityValue('alarm_contact.light', lightsOn);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update light contact:', error);
@@ -341,21 +270,21 @@ class SkodaVehicleDevice extends Homey.Device {
       // Battery/Charging capabilities
       let batteryLevel = 0;
       try {
-        batteryLevel = charging.status.battery.stateOfChargeInPercent;
+        batteryLevel = extractBatteryLevel(charging);
         await this.setCapabilityValue('measure_battery', batteryLevel);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update battery:', error);
       }
 
       try {
-        const rangeKm = charging.status.battery.remainingCruisingRangeInMeters / 1000;
-        await this.setCapabilityValue('measure_distance', Math.round(rangeKm));
+        const rangeKm = extractRemainingRange(charging);
+        await this.setCapabilityValue('measure_distance', rangeKm);
       } catch (error) {
         this.error('[CAPABILITIES] Failed to update distance:', error);
       }
 
       try {
-        const chargingPower = charging.status.chargePowerInKw;
+        const chargingPower = extractChargingPower(charging);
         this.log(`[POWER] Current charging power: ${chargingPower} kW`);
         await this.setCapabilityValue('measure_power', chargingPower);
       } catch (error) {
@@ -364,7 +293,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
       // Charging state (on/off) - only update from API if manual override is not active AND automatic control is not active
       try {
-        const isCharging = charging.status.state === 'CHARGING' || charging.status.state === 'CHARGING_AC' || charging.status.state === 'CHARGING_DC';
+        const isCharging = extractChargingState(charging);
 
         // Check if automatic control is active (low price or low battery)
         const isAutomaticControlActive = this.isAutomaticControlActive();
@@ -829,7 +758,7 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       // Find cheapest blocks (recomputed each time from cached price data)
-      const cheapest = this.findCheapestBlocks(updatedCache, blocksCount);
+      const cheapest = this.findCheapestBlocksWithLogging(updatedCache, blocksCount);
 
       // Always update status display (even if feature is disabled)
       await this.updatePriceStatus(cheapest, timezone);
@@ -841,35 +770,29 @@ class SkodaVehicleDevice extends Homey.Device {
         return;
       }
 
-      // Check if current time is in cheap period
+      // Use isolated decision logic
       const now = Date.now();
-      const isCheapNow = cheapest.some((b: PriceBlock) => now >= b.start && now < b.end);
+      const batteryLevel = this.getCapabilityValue('measure_battery') as number | null;
+      const threshold = this.getSetting('low_battery_threshold') as number | null;
+      const wasOnDueToPrice = this.getSetting('_low_price_enabled') as boolean;
 
-      // Control device (only if battery is not low - low battery takes priority)
-      const batteryLevel = this.getCapabilityValue('measure_battery') as number;
-      const threshold = this.getSetting('low_battery_threshold') as number;
+      const decision = decideLowPriceCharging(cheapest, now, {
+        enableLowPrice,
+        batteryLevel,
+        lowBatteryThreshold: threshold,
+        manualOverrideActive: this.isManualOverrideActive(),
+        wasOnDueToPrice,
+      });
 
-      if (threshold && batteryLevel < threshold) {
-        this.log('[LOW_PRICE] Battery is low, skipping price-based control (low battery takes priority)');
-        return;
-      }
-
-      // Check if manual override is still active
-      if (this.isManualOverrideActive()) {
-        this.log('[LOW_PRICE] Skipping automation - manual override still active');
-        return;
-      }
-
-      if (isCheapNow) {
+      // Execute decision
+      if (decision === 'turnOn') {
         this.log('[LOW_PRICE] Current time is in cheapest period, turning ON self onoff');
         await this.turnOnChargingSelf(false);
-      } else {
-        const wasOnDueToPrice = this.getSetting('_low_price_enabled') as boolean;
-        if (wasOnDueToPrice) {
-          this.log('[LOW_PRICE] Current time is NOT in cheapest period, turning OFF self onoff');
-          await this.turnOffChargingSelf();
-        }
+      } else if (decision === 'turnOff') {
+        this.log('[LOW_PRICE] Current time is NOT in cheapest period, turning OFF self onoff');
+        await this.turnOffChargingSelf();
       }
+      // noChange - decision logic already handled the reason
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -905,28 +828,24 @@ class SkodaVehicleDevice extends Homey.Device {
   private isManualOverrideActive(): boolean {
     try {
       const manualOverrideTimestamp = this.getSetting('_manual_override_timestamp') as number | undefined;
-      if (!manualOverrideTimestamp) {
-        return false;
-      }
       const now = Date.now();
-      const timeSinceManual = now - manualOverrideTimestamp;
-      const isActive = timeSinceManual < this.MANUAL_OVERRIDE_DURATION;
+      const isActive = checkManualOverrideActive(manualOverrideTimestamp, now);
 
       if (isActive) {
         // Only log remaining time occasionally (every 5 minutes) to avoid spam
-        const remainingMinutes = Math.ceil((this.MANUAL_OVERRIDE_DURATION - timeSinceManual) / (60 * 1000));
+        const remainingMinutes = calculateRemainingMinutes(manualOverrideTimestamp, now);
         const lastLogTime = this.getSetting('_last_override_log_time') as number | undefined;
-        if (!lastLogTime || (now - lastLogTime) > 5 * 60 * 1000) {
+        if (shouldLogRemainingTime(lastLogTime, now)) {
           this.log(`[ONOFF] Manual override active, ${remainingMinutes} minute(s) remaining`);
           this.setSettings({ _last_override_log_time: now }).catch(() => { });
         }
       } else {
         // Only log expiration once - check if we've already logged it
         const lastExpirationLog = this.getSetting('_last_expiration_log_time') as number | undefined;
-        const expirationTime = manualOverrideTimestamp + this.MANUAL_OVERRIDE_DURATION;
+        const expirationTime = calculateExpirationTime(manualOverrideTimestamp);
 
         // Only log if we haven't logged this expiration yet, or if it's a new expiration
-        if (!lastExpirationLog || lastExpirationLog < expirationTime) {
+        if (expirationTime && shouldLogExpiration(lastExpirationLog, expirationTime)) {
           this.log('[ONOFF] Manual override expired, automation can take control');
           this.setSettings({ _last_expiration_log_time: now }).catch(() => { });
         }
@@ -1107,24 +1026,32 @@ class SkodaVehicleDevice extends Homey.Device {
       const cache = await this.loadPriceCache();
 
       // Find cheapest blocks from cached price data (recomputed each time)
-      const cheapest = this.findCheapestBlocks(cache, blocksCount);
+      const cheapest = this.findCheapestBlocksWithLogging(cache, blocksCount);
 
-      // Check if current time is in cheap period
+      // Use isolated decision logic
       const now = Date.now();
-      const isCheapNow = cheapest.some((b: PriceBlock) => now >= b.start && now < b.end);
+      const enableLowPrice = true; // Already checked above
+      const batteryLevel = this.getCapabilityValue('measure_battery') as number | null;
+      const threshold = this.getSetting('low_battery_threshold') as number | null;
+      const wasOnDueToPrice = this.getSetting('_low_price_enabled') as boolean;
 
-      // Control device
-      if (isCheapNow) {
+      const decision = decideLowPriceCharging(cheapest, now, {
+        enableLowPrice,
+        batteryLevel,
+        lowBatteryThreshold: threshold,
+        manualOverrideActive: this.isManualOverrideActive(),
+        wasOnDueToPrice,
+      });
+
+      // Execute decision
+      if (decision === 'turnOn') {
         this.log(`[LOW_PRICE] Current time is in cheapest period, turning ON self onoff`);
         await this.turnOnChargingSelf(false); // false = not due to low battery
-      } else {
-        // Check if device was on due to low price, turn off if needed
-        const wasOnDueToPrice = this.getSetting('_low_price_enabled') as boolean;
-        if (wasOnDueToPrice) {
-          this.log(`[LOW_PRICE] Current time is NOT in cheapest period, turning OFF self onoff`);
-          await this.turnOffChargingSelf();
-        }
+      } else if (decision === 'turnOff') {
+        this.log(`[LOW_PRICE] Current time is NOT in cheapest period, turning OFF self onoff`);
+        await this.turnOffChargingSelf();
       }
+      // noChange - decision logic already handled the reason
 
       // Update status with next cheap times
       await this.updatePriceStatus(cheapest, timezone);
@@ -1259,25 +1186,21 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Find cheapest blocks from cached price data
-   * - Only the raw price data is cached in `price_cache`
-   * - This function always recalculates the cheapest blocks using the current `count`
-   * - This means changing the setting will immediately affect the selected blocks
-   * - Finds the cheapest individual blocks (not necessarily consecutive)
+   * Find cheapest blocks from cached price data (wrapper with logging)
+   * - Uses isolated findCheapestBlocks function
+   * - Adds logging for debugging
    */
-  findCheapestBlocks(cache: PriceCache, count: number): Array<PriceBlock> {
+  private findCheapestBlocksWithLogging(cache: PriceCache, count: number): Array<PriceBlock> {
     const now = Date.now();
-    const todayUTC = new Date(now).getUTCDate();
-    const tomorrowUTC = new Date(now + 86400000).getUTCDate();
-
-    // Filter relevant blocks (today and tomorrow)
+    const allBlocks = Object.values(cache);
     const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
+      const todayUTC = new Date(now).getUTCDate();
+      const tomorrowUTC = new Date(now + 86400000).getUTCDate();
       const d = new Date(b.start).getUTCDate();
       return d === todayUTC || d === tomorrowUTC;
     }) as Array<PriceBlock>;
 
     // Log cache statistics for debugging
-    const allBlocks = Object.values(cache);
     const pastBlocks = relevantBlocks.filter((b) => b.start <= now);
     const futureBlocks = relevantBlocks.filter((b) => b.start > now);
     this.log(
@@ -1293,61 +1216,19 @@ class SkodaVehicleDevice extends Homey.Device {
       this.log(`[LOW_PRICE] Top 5 cheapest relevant blocks: ${cheapest5}`);
     }
 
-    if (relevantBlocks.length === 0 || count <= 0) {
-      return [];
+    // Use isolated function
+    const cheapest = findCheapestBlocks(cache, count, now);
+
+    // Log result for debugging
+    if (cheapest.length > 0) {
+      const blocksStr = cheapest.map((b: PriceBlock) => {
+        const date = new Date(b.start);
+        const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
+        return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, price: ${b.price.toFixed(5)})${isPast}`;
+      }).join(', ');
+      const totalPrice = cheapest.reduce((sum, b) => sum + b.price, 0);
+      this.log(`[LOW_PRICE] Computed cheapest blocks for count=${count}: ${cheapest.length} blocks (total: ${totalPrice.toFixed(4)} €/kWh) -> ${blocksStr}`);
     }
-
-    // Step 1: Find cheapest blocks for TODAY (including past ones)
-    const todayBlocks = relevantBlocks.filter((b: PriceBlock) => {
-      const d = new Date(b.start).getUTCDate();
-      return d === todayUTC;
-    });
-    const sortedTodayByPrice = [...todayBlocks].sort((a, b) => a.price - b.price);
-    const cheapestToday = sortedTodayByPrice.slice(0, count);
-
-    // Filter to only future blocks from today's cheapest
-    let cheapest = cheapestToday.filter((b) => b.start > now);
-
-    // Log today's cheapest blocks for debugging
-    const cheapestTodayDebug = cheapestToday.map((b: PriceBlock) => {
-      const date = new Date(b.start);
-      const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
-      return `${date.toISOString()} (price: ${b.price.toFixed(5)})${isPast}`;
-    }).join(', ');
-    this.log(
-      `[LOW_PRICE] Cheapest ${count} blocks for today (including past): ${cheapestTodayDebug}`,
-    );
-    this.log(
-      `[LOW_PRICE] Future blocks from today's cheapest: ${cheapest.length} out of ${cheapestToday.length}`,
-    );
-
-    // Step 2: If no future blocks from today, find cheapest blocks for TOMORROW
-    if (cheapest.length === 0) {
-      this.log(
-        `[LOW_PRICE] No future blocks from today's cheapest, finding cheapest blocks for tomorrow`,
-      );
-      const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => {
-        const d = new Date(b.start).getUTCDate();
-        return d === tomorrowUTC && b.start > now;
-      });
-      const sortedTomorrowByPrice = [...tomorrowBlocks].sort((a, b) => a.price - b.price);
-      cheapest = sortedTomorrowByPrice.slice(0, count);
-      this.log(
-        `[LOW_PRICE] Found ${cheapest.length} cheapest future blocks from tomorrow (out of ${tomorrowBlocks.length} available)`,
-      );
-    }
-
-    // Sort result by time for consistent ordering
-    cheapest.sort((a, b) => a.start - b.start);
-
-    // Log for debugging with prices
-    const blocksStr = cheapest.map((b: PriceBlock) => {
-      const date = new Date(b.start);
-      const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
-      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, price: ${b.price.toFixed(5)})${isPast}`;
-    }).join(', ');
-    const totalPrice = cheapest.reduce((sum, b) => sum + b.price, 0);
-    this.log(`[LOW_PRICE] Computed cheapest blocks for count=${count}: ${cheapest.length} blocks (total: ${totalPrice.toFixed(4)} €/kWh) -> ${blocksStr}`);
 
     return cheapest;
   }

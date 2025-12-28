@@ -1,8 +1,7 @@
 'use strict';
 
 import Homey from 'homey';
-
-const BASE_URL = 'https://mysmob.api.connect.skoda-auto.cz';
+import { fetchVehicles, fetchVehicleInfo, BASE_URL } from './logic/skodaApi/apiClient';
 
 interface TokenResponse {
   accessToken: string;
@@ -446,30 +445,9 @@ module.exports = class SkodaApp extends Homey.App {
    */
   async listVehicles(accessToken: string): Promise<Array<{ vin: string; name: string }>> {
     this.log('[VEHICLES] listVehicles: preparing request to garage API');
-    const url =
-      `${BASE_URL}/api/v2/garage?connectivityGenerations=MOD1` +
-      `&connectivityGenerations=MOD2&connectivityGenerations=MOD3` +
-      `&connectivityGenerations=MOD4`;
-
-    this.log(`[VEHICLES] listVehicles: GET ${url}`);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    this.log(`[VEHICLES] listVehicles: response status ${response.status}`);
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`List vehicles failed ${response.status}: ${text}`);
-    }
-
-    const data = await response.json() as { vehicles?: Array<{ vin: string; name: string }> };
-    const vehicles = data.vehicles || [];
+    
+    const vehicles = await fetchVehicles(accessToken);
+    
     this.log(`[VEHICLES] listVehicles: received ${vehicles.length} vehicle(s)`);
     vehicles.slice(0, 5).forEach((v, i) => {
       this.log(`[VEHICLES] vehicle #${i + 1}: name="${v.name || 'Unnamed'}" vin="${v.vin}"`);
@@ -495,50 +473,12 @@ module.exports = class SkodaApp extends Homey.App {
   }> {
     return await this.executeWithAuthRecovery(async (token: string) => {
       this.log(`[INFO] Fetching vehicle info for VIN: ${vin}`);
-      const url = `${BASE_URL}/api/v2/garage/vehicles/${vin}`;
-
-      this.log(`[INFO] GET ${url}`);
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      this.log(`[INFO] Response status: ${response.status}`);
-
-      if (!response.ok) {
-        const text = await response.text();
-        const status = response.status;
-        const error = new Error(`Get vehicle info failed ${status}: ${text}`);
-        (error as any).statusCode = status;
-        throw error;
-      }
-
-      const data = await response.json() as {
-        name?: string;
-        licensePlate?: string;
-        compositeRenders?: Array<{
-          viewType: string;
-          layers: Array<{ url: string; type: string; order: number; viewPoint: string }>;
-        }>;
-        specification?: {
-          model?: string;
-          title?: string;
-          modelYear?: string;
-        };
-      };
       
-      this.log(`[INFO] Vehicle info received: name="${data.name || 'Unnamed'}", licensePlate="${data.licensePlate || 'N/A'}"`);
+      const info = await fetchVehicleInfo(token, vin);
       
-      return {
-        name: data.name || '',
-        licensePlate: data.licensePlate,
-        compositeRenders: data.compositeRenders || [],
-        specification: data.specification,
-      };
+      this.log(`[INFO] Vehicle info received: name="${info.name || 'Unnamed'}", licensePlate="${info.licensePlate || 'N/A'}"`);
+      
+      return info;
     }, 'INFO');
   }
 

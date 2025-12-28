@@ -87,7 +87,7 @@ describe('findCheapestBlocks', () => {
   });
 
   describe('edge cases - date handling', () => {
-    test('handles all blocks in past but same UTC day', () => {
+    test('handles all blocks in past but same UTC day - returns empty or tomorrow blocks', () => {
       // Create cache with only past blocks on the same UTC day
       const now = Date.now();
       const today = new Date(now);
@@ -102,9 +102,8 @@ describe('findCheapestBlocks', () => {
       // Set now to later in the day so blocks are in past
       const laterNow = today.getTime() + (20 * 60 * 60 * 1000); // 20:00 UTC
       const result = findCheapestBlocks(pastCache, 8, laterNow);
-      // Should return blocks from today even if they're in the past
-      expect(result.length).toBeGreaterThan(0);
-      expect(result.length).toBeLessThanOrEqual(10);
+      // Should return empty array since all blocks are in past and no tomorrow blocks
+      expect(result.length).toBe(0);
     });
 
     test('handles getUTCDate comparison across month boundaries', () => {
@@ -144,9 +143,10 @@ describe('findCheapestBlocks', () => {
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
       const duplicateCache: PriceCache = {};
-      // Create blocks with same price
+      // Create blocks with same price in the future
+      // Start from 1 hour in the future to ensure they're all future blocks
       for (let i = 0; i < 10; i++) {
-        const start = today.getTime() + i * blockDuration;
+        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
         const end = start + blockDuration;
         duplicateCache[String(start)] = { start, end, price: 0.1 }; // All same price
       }
@@ -164,10 +164,11 @@ describe('findCheapestBlocks', () => {
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
       const negativeCache: PriceCache = {};
-      // Create blocks with negative prices (shouldn't happen but test robustness)
+      // Create blocks with negative prices in the future (shouldn't happen but test robustness)
       // Prices: -0.5, -0.4, -0.3, -0.2, -0.1 (most negative = cheapest)
+      // Start from 1 hour in the future to ensure they're all future blocks
       for (let i = 0; i < 5; i++) {
-        const start = today.getTime() + i * blockDuration;
+        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
         const end = start + blockDuration;
         negativeCache[String(start)] = { start, end, price: -0.1 * (5 - i) }; // -0.5, -0.4, -0.3, -0.2, -0.1
       }
@@ -191,9 +192,10 @@ describe('findCheapestBlocks', () => {
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
       const largeCache: PriceCache = {};
-      // Create blocks with very large prices
+      // Create blocks with very large prices in the future
+      // Start from 1 hour in the future to ensure they're all future blocks
       for (let i = 0; i < 5; i++) {
-        const start = today.getTime() + i * blockDuration;
+        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
         const end = start + blockDuration;
         largeCache[String(start)] = { start, end, price: 1000000 + i }; // Very large prices
       }

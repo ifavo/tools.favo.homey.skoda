@@ -1,56 +1,7 @@
 'use strict';
 
 import Homey from 'homey';
-
-const BASE_URL = 'https://mysmob.api.connect.skoda-auto.cz';
-
-interface Vehicle {
-  vin: string;
-  name: string;
-}
-
-interface VehicleStatus {
-  status: {
-    overall: {
-      doorsLocked: string;
-      locked: string;
-      doors: string;
-      windows: string;
-      lights: string;
-      reliableLockStatus: string;
-    };
-    detail: {
-      sunroof: string;
-      trunk: string;
-      bonnet: string;
-    };
-    carCapturedTimestamp: string;
-  };
-  charging: {
-    status: {
-      chargingRateInKilometersPerHour: number;
-      chargePowerInKw: number;
-      remainingTimeToFullyChargedInMinutes: number;
-      state: string;
-      battery: {
-        remainingCruisingRangeInMeters: number;
-        stateOfChargeInPercent: number;
-      };
-    };
-    settings: {
-      targetStateOfChargeInPercent: number;
-      batteryCareModeTargetValueInPercent: number;
-      preferredChargeMode: string;
-      availableChargeModes: string[];
-      chargingCareMode: string;
-      autoUnlockPlugWhenCharged: string;
-      maxChargeCurrentAc: string;
-    };
-    carCapturedTimestamp: string;
-    errors: any[];
-  };
-  timestamp: string;
-}
+import { fetchVehicles, type Vehicle } from '../../logic/skodaApi/apiClient';
 
 class SkodaVehicleDriver extends Homey.Driver {
 
@@ -95,39 +46,15 @@ class SkodaVehicleDriver extends Homey.Driver {
    */
   private async listVehiclesInternal(accessToken: string): Promise<Vehicle[]> {
     this.log('[PAIR] listVehicles: preparing request to garage API');
-    const url =
-      `${BASE_URL}/api/v2/garage?connectivityGenerations=MOD1` +
-      `&connectivityGenerations=MOD2&connectivityGenerations=MOD3` +
-      `&connectivityGenerations=MOD4`;
-
-    this.log(`[PAIR] listVehicles: GET ${url}`);
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    this.log(`[PAIR] listVehicles: response status ${response.status}`);
-
-    if (!response.ok) {
-      const text = await response.text();
-      const status = response.status;
-      const error = new Error(`List vehicles failed ${status}: ${text}`);
-      (error as any).statusCode = status;
-      throw error;
-    }
-
-    const data = await response.json() as { vehicles?: Vehicle[] };
-    const vehicles = data.vehicles || [];
+    
+    const vehicles = await fetchVehicles(accessToken);
+    
     this.log(`[PAIR] listVehicles: received ${vehicles.length} vehicle(s)`);
     vehicles.slice(0, 5).forEach((v, i) => {
       this.log(`[PAIR] vehicle #${i + 1}: name="${v.name || 'Unnamed'}" vin="${v.vin}"`);
     });
 
-    return data.vehicles || [];
+    return vehicles;
   }
 
   /**
