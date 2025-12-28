@@ -1257,27 +1257,55 @@ class SkodaVehicleDevice extends Homey.Device {
       return byTime;
     }
 
-    // Sliding window over consecutive blocks to find cheapest consecutive sequence
-    let bestStartIndex = 0;
-    let bestSum = Number.POSITIVE_INFINITY;
-
-    // Initial window
-    let currentSum = 0;
-    for (let i = 0; i < count; i++) {
-      currentSum += byTime[i].price;
-    }
-    bestSum = currentSum;
-
-    // Move the window one block at a time
-    for (let end = count; end < byTime.length; end++) {
-      currentSum += byTime[end].price - byTime[end - count].price;
-      if (currentSum < bestSum) {
-        bestSum = currentSum;
-        bestStartIndex = end - count + 1;
+    // Helper function to find cheapest consecutive blocks using sliding window
+    const findCheapestConsecutive = (blocks: Array<PriceBlock>, numBlocks: number): { blocks: Array<PriceBlock>; allPast: boolean } => {
+      if (numBlocks >= blocks.length) {
+        const allPast = blocks.every((b) => b.start <= now);
+        return { blocks, allPast };
       }
-    }
 
-    const cheapest = byTime.slice(bestStartIndex, bestStartIndex + count);
+      let bestStartIndex = 0;
+      let bestSum = Number.POSITIVE_INFINITY;
+
+      // Initial window
+      let currentSum = 0;
+      for (let i = 0; i < numBlocks; i++) {
+        currentSum += blocks[i].price;
+      }
+      bestSum = currentSum;
+
+      // Move the window one block at a time
+      for (let end = numBlocks; end < blocks.length; end++) {
+        currentSum += blocks[end].price - blocks[end - numBlocks].price;
+        if (currentSum < bestSum) {
+          bestSum = currentSum;
+          bestStartIndex = end - numBlocks + 1;
+        }
+      }
+
+      const result = blocks.slice(bestStartIndex, bestStartIndex + numBlocks);
+      const allPast = result.every((b) => b.start <= now);
+      return { blocks: result, allPast };
+    };
+
+    // First, try to find cheapest consecutive blocks overall
+    const overallResult = findCheapestConsecutive(byTime, count);
+
+    // If all cheapest blocks are in the past, find cheapest future blocks instead
+    let cheapest: Array<PriceBlock>;
+    if (overallResult.allPast) {
+      const futureBlocks = byTime.filter((b) => b.start > now);
+      if (futureBlocks.length >= count) {
+        const futureResult = findCheapestConsecutive(futureBlocks, count);
+        cheapest = futureResult.blocks;
+        this.log(`[LOW_PRICE] All cheapest blocks were in the past, using cheapest future blocks instead`);
+      } else {
+        // Not enough future blocks, return the overall cheapest anyway
+        cheapest = overallResult.blocks;
+      }
+    } else {
+      cheapest = overallResult.blocks;
+    }
 
     // Log for debugging
     const blocksStr = cheapest.map((b: PriceBlock) => {
