@@ -787,14 +787,14 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async updatePricesAndCheckCharging(): Promise<void> {
     try {
-      this.log('[LOW_PRICE] Updating prices from aWATTar API');
+      this.log('[LOW_PRICE] Updating prices from Smart Energy API');
 
       // Auto-detect timezone if not configured, fallback to Homey's timezone
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
-      const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
+      const blocksCount = (this.getSetting('low_price_blocks_count') as number) || 8;
 
-      // Log configured number of cheapest hours for debugging
-      this.log(`[LOW_PRICE] Configured number of cheapest hours: ${hoursCount}`);
+      // Log configured number of cheapest blocks for debugging
+      this.log(`[LOW_PRICE] Configured number of cheapest blocks: ${blocksCount}`);
 
       // Always load cache and fetch prices to update display
       const cache = await this.loadPriceCache();
@@ -815,8 +815,8 @@ class SkodaVehicleDevice extends Homey.Device {
         this.error('[LOW_PRICE_DEBUG] Failed to log price cache:', errorMessage);
       }
 
-      // Find cheapest hours (recomputed each time from cached price data)
-      const cheapest = this.findCheapestHours(updatedCache, hoursCount);
+      // Find cheapest blocks (recomputed each time from cached price data)
+      const cheapest = this.findCheapestBlocks(updatedCache, blocksCount);
 
       // Always update status display (even if feature is disabled)
       await this.updatePriceStatus(cheapest, timezone);
@@ -1084,17 +1084,17 @@ class SkodaVehicleDevice extends Homey.Device {
         return;
       }
 
-      const hoursCount = (this.getSetting('low_price_hours_count') as number) || 2;
+      const blocksCount = (this.getSetting('low_price_blocks_count') as number) || 8;
       // Auto-detect timezone if not configured, fallback to Homey's timezone
       const timezone = (this.getSetting('price_timezone') as string) || this.getTimezone();
 
-      this.log(`[LOW_PRICE] Checking low price charging (cheapest ${hoursCount} hours)`);
+      this.log(`[LOW_PRICE] Checking low price charging (cheapest ${blocksCount} blocks)`);
 
       // Load cache from store (don't fetch - use cached data)
       const cache = await this.loadPriceCache();
 
-      // Find cheapest hours from cached price data (recomputed each time)
-      const cheapest = this.findCheapestHours(cache, hoursCount);
+      // Find cheapest blocks from cached price data (recomputed each time)
+      const cheapest = this.findCheapestBlocks(cache, blocksCount);
 
       // Check if current time is in cheap period
       const now = Date.now();
@@ -1139,30 +1139,75 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Fetch prices from aWATTar API and update cache
+   * Fetch prices from Smart Energy API and update cache
    */
   async fetchAndUpdatePrices(cache: PriceCache): Promise<PriceCache> {
     try {
-      const response = await fetch('https://api.awattar.de/v1/marketdata');
+      const response = await fetch('https://apis.smartenergy.at/market/v1/price');
       if (!response.ok) {
-        throw new Error(`aWATTar API failed: ${response.status}`);
+        throw new Error(`Smart Energy API failed: ${response.status}`);
       }
 
-      const json = await response.json() as { data: Array<{ start_timestamp: number; end_timestamp: number; marketprice: number }> };
+      const json = await response.json() as {
+        tariff: string;
+        unit: string;
+        interval: number;
+        data: Array<{ date: string; value: number }>
+      };
+
+      // Verify we have 15-minute intervals
+      if (json.interval !== 15) {
+        this.log(`[LOW_PRICE] Warning: API returned interval of ${json.interval} minutes, expected 15`);
+      }
 
       // Update cache with new prices
+      // Each entry is a 15-minute block
+      const blockDurationMs = 15 * 60 * 1000; // 15 minutes in milliseconds
+
+      let newBlocks = 0;
+      let updatedBlocks = 0;
+      let priceChanges = 0;
+
       for (const p of json.data) {
-        cache[p.start_timestamp] = {
-          start: p.start_timestamp,
-          end: p.end_timestamp,
-          price: p.marketprice / 1000, // Convert to €/kWh
+        const startTimestamp = new Date(p.date).getTime();
+        const endTimestamp = startTimestamp + blockDurationMs;
+
+        // Convert ct/kWh to €/kWh (divide by 100)
+        const priceInEuros = p.value / 100;
+
+        // Check if this block already exists in cache
+        const existingBlock = cache[startTimestamp];
+        const isUpdate = existingBlock !== undefined;
+
+        // Update or add the block (this will overwrite existing entries with new prices)
+        cache[startTimestamp] = {
+          start: startTimestamp,
+          end: endTimestamp,
+          price: priceInEuros,
         };
+
+        if (isUpdate) {
+          updatedBlocks++;
+          // Log if price actually changed
+          if (existingBlock.price !== priceInEuros) {
+            priceChanges++;
+            this.log(
+              `[LOW_PRICE] Price updated for ${new Date(startTimestamp).toISOString()}: `
+              + `${existingBlock.price.toFixed(4)} → ${priceInEuros.toFixed(4)} €/kWh`,
+            );
+          }
+        } else {
+          newBlocks++;
+        }
       }
 
       // Save cache to device store
       await this.savePriceCache(cache);
 
-      this.log(`[LOW_PRICE] Updated price cache with ${json.data.length} price blocks`);
+      this.log(
+        `[LOW_PRICE] Updated price cache: ${newBlocks} new blocks, ${updatedBlocks} existing blocks updated `
+        + `(${priceChanges} with price changes), total ${json.data.length} blocks (15-minute intervals)`,
+      );
       return cache;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1183,33 +1228,64 @@ class SkodaVehicleDevice extends Homey.Device {
   }
 
   /**
-   * Find cheapest hours from cached price data
+   * Find cheapest blocks from cached price data
    * - Only the raw price data is cached in `price_cache`
-   * - This function always recalculates the cheapest hours using the current `count`
-   * - This means changing the setting will immediately affect the selected hours
+   * - This function always recalculates the cheapest blocks using the current `count`
+   * - This means changing the setting will immediately affect the selected blocks
+   * - Uses sliding window to find cheapest consecutive blocks for stable selection
    */
-  findCheapestHours(cache: PriceCache, count: number): Array<PriceBlock> {
+  findCheapestBlocks(cache: PriceCache, count: number): Array<PriceBlock> {
     const now = Date.now();
-    const todayUTC = new Date().getUTCDate();
+    const todayUTC = new Date(now).getUTCDate();
     const tomorrowUTC = new Date(now + 86400000).getUTCDate();
 
     // Filter relevant blocks (today and tomorrow)
     const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
       const d = new Date(b.start).getUTCDate();
       return d === todayUTC || d === tomorrowUTC;
-    }) as Array<{ start: number; end: number; price: number }>;
+    }) as Array<PriceBlock>;
 
-    // Sort by price and take cheapest N hours
-    const cheapest = [...relevantBlocks]
-      .sort((a, b) => a.price - b.price)
-      .slice(0, count);
+    if (relevantBlocks.length === 0 || count <= 0) {
+      return [];
+    }
+
+    // Sort by time so we can look for the cheapest *consecutive* window
+    // This ensures stable selection even after restart
+    const byTime = [...relevantBlocks].sort((a, b) => a.start - b.start);
+
+    if (count >= byTime.length) {
+      return byTime;
+    }
+
+    // Sliding window over consecutive blocks to find cheapest consecutive sequence
+    let bestStartIndex = 0;
+    let bestSum = Number.POSITIVE_INFINITY;
+
+    // Initial window
+    let currentSum = 0;
+    for (let i = 0; i < count; i++) {
+      currentSum += byTime[i].price;
+    }
+    bestSum = currentSum;
+
+    // Move the window one block at a time
+    for (let end = count; end < byTime.length; end++) {
+      currentSum += byTime[end].price - byTime[end - count].price;
+      if (currentSum < bestSum) {
+        bestSum = currentSum;
+        bestStartIndex = end - count + 1;
+      }
+    }
+
+    const cheapest = byTime.slice(bestStartIndex, bestStartIndex + count);
 
     // Log for debugging
-    const hoursStr = cheapest.map((b: PriceBlock) => {
+    const blocksStr = cheapest.map((b: PriceBlock) => {
       const date = new Date(b.start);
-      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})`;
+      const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
+      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })})${isPast}`;
     }).join(', ');
-    this.log(`[LOW_PRICE] Computed cheapest hours for count=${count}: ${cheapest.length} hours -> ${hoursStr}`);
+    this.log(`[LOW_PRICE] Computed cheapest consecutive blocks for count=${count}: ${cheapest.length} blocks -> ${blocksStr}`);
 
     return cheapest;
   }
@@ -1282,20 +1358,20 @@ class SkodaVehicleDevice extends Homey.Device {
     try {
       const now = Date.now();
 
-      // Log all cheapest hours with their timestamps for debugging
-      const allHoursDebug = cheapest.map((b: PriceBlock) => {
+      // Log all cheapest blocks with their timestamps for debugging
+      const allBlocksDebug = cheapest.map((b: PriceBlock) => {
         const date = new Date(b.start);
         const isFuture = b.start > now;
         return `${date.toISOString()} (${date.toLocaleString('en-US', { timeZone: timezone || 'UTC', hour: '2-digit', minute: '2-digit' })}${isFuture ? ' [FUTURE]' : ' [PAST]'})`;
       }).join(', ');
-      this.log(`[LOW_PRICE] All cheapest hours (${cheapest.length}): ${allHoursDebug}`);
+      this.log(`[LOW_PRICE] All cheapest blocks (${cheapest.length}): ${allBlocksDebug}`);
       this.log(`[LOW_PRICE] Current time: ${new Date(now).toISOString()}`);
 
       const future = cheapest
         .filter((b) => b.start > now)
         .sort((a, b) => a.start - b.start);
 
-      this.log(`[LOW_PRICE] Future hours after filtering: ${future.length} out of ${cheapest.length}`);
+      this.log(`[LOW_PRICE] Future blocks after filtering: ${future.length} out of ${cheapest.length}`);
 
       // Auto-detect locale and timezone
       const locale = this.getLocale();

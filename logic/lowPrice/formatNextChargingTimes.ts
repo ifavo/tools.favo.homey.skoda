@@ -8,8 +8,8 @@ export interface FormatOptions {
 
 /**
  * Format the "next charging times" string from cheapest price blocks.
- * - Groups consecutive hourly blocks into ranges
- * - Example: 11:00, 12:00, 13:00 -> "11–13"
+ * - Groups consecutive 15-minute blocks into ranges
+ * - Example: 11:00, 11:15, 11:30 -> "11:00–11:30"
  */
 export function formatNextChargingTimes(
   cheapest: Array<PriceBlock>,
@@ -25,7 +25,7 @@ export function formatNextChargingTimes(
     return 'Unknown';
   }
 
-  // Group consecutive hourly blocks into ranges
+  // Group consecutive 15-minute blocks into ranges
   const groups: Array<{ start: number; end: number }> = [];
 
   let currentStart = future[0].start;
@@ -52,13 +52,14 @@ export function formatNextChargingTimes(
       const startDate = new Date(g.start);
       const endDate = new Date(g.end);
 
-      // If range is exactly one hour (single block), show as single time
-      if (g.end - g.start === 60 * 60 * 1000) {
+      // If range is exactly one 15-minute block, show as single time
+      const blockDurationMs = 15 * 60 * 1000; // 15 minutes
+      if (g.end - g.start === blockDurationMs) {
         return formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
       }
 
-      // Timeframe: hide :00 on the start, always show full end
-      const startStr = formatTime(startDate, locale, timezone, { ignoreZeroMinutes: true });
+      // Timeframe: show full start and end times for 15-minute blocks
+      const startStr = formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
       const endStr = formatTime(endDate, locale, timezone, { ignoreZeroMinutes: false });
 
       return `${startStr}–${endStr}`;
@@ -104,6 +105,7 @@ export function formatTime(
 
   return str;
 }
+
 
 
 

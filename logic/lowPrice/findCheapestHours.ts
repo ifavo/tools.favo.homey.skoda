@@ -1,12 +1,12 @@
 import type { PriceBlock, PriceCache } from './types';
 
 /**
- * Find cheapest hours from cached price data.
+ * Find cheapest blocks from cached price data.
  * - Only the raw price data is cached in `price_cache`
- * - This function always recalculates the cheapest hours using the current `count`
+ * - This function always recalculates the cheapest blocks using the current `count`
  * - `now` is passed in for testability; defaults to current time.
  */
-export function findCheapestHours(
+export function findCheapestBlocks(
   cache: PriceCache,
   count: number,
   now: number = Date.now(),

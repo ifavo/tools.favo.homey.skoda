@@ -117,18 +117,18 @@
       },
       "value": false,
       "hint": {
-        "en": "Automatically charge during cheapest electricity price hours"
+        "en": "Automatically charge during cheapest electricity price blocks (15 minutes)"
       }
     },
     {
-      "id": "low_price_hours_count",
+      "id": "low_price_blocks_count",
       "type": "number",
       "label": {
-        "en": "Number of Cheapest Hours"
+        "en": "Number of Cheapest Blocks (15 min)"
       },
-      "value": 2,
+      "value": 8,
       "hint": {
-        "en": "Number of cheapest hours per day to charge (default: 2)"
+        "en": "Number of cheapest 15-minute blocks per day to charge (default: 8 = 2 hours)"
       }
     },
         {
