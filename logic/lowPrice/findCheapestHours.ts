@@ -3,6 +3,9 @@ import { getUTCDate, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
 
 /**
  * Check if a block is on a specific UTC date
+ * @param block - Price block to check
+ * @param dateUTC - UTC date number (1-31) to check against
+ * @returns True if block is on the specified UTC date, false otherwise
  */
 function isBlockOnDate(block: PriceBlock, dateUTC: number): boolean {
   return getUTCDate(block.start) === dateUTC;
@@ -10,6 +13,9 @@ function isBlockOnDate(block: PriceBlock, dateUTC: number): boolean {
 
 /**
  * Sort blocks by price (cheapest first) and return top N
+ * @param blocks - Array of price blocks to sort
+ * @param count - Number of cheapest blocks to return
+ * @returns Array of cheapest price blocks, sorted by price (ascending)
  */
 function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<PriceBlock> {
   return [...blocks].sort((a, b) => a.price - b.price).slice(0, count);
@@ -22,6 +28,10 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
  * - `now` is passed in for testability; defaults to current time.
  * - Finds the cheapest individual blocks (not necessarily consecutive)
  * - Looks at today first, falls back to tomorrow if no future blocks from today
+ * @param cache - Cached price data as PriceCache object
+ * @param count - Number of cheapest blocks to find
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns Array of cheapest price blocks, sorted by time
  */
 export function findCheapestBlocks(
   cache: PriceCache,

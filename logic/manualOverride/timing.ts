@@ -17,6 +17,9 @@ export interface ManualOverrideState {
 
 /**
  * Check if manual override is currently active
+ * @param manualOverrideTimestamp - Timestamp when manual override was activated (undefined if not active)
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns True if manual override is active, false otherwise
  */
 export function isManualOverrideActive(
   manualOverrideTimestamp: number | undefined,
@@ -31,6 +34,9 @@ export function isManualOverrideActive(
 
 /**
  * Calculate remaining minutes until manual override expires
+ * @param manualOverrideTimestamp - Timestamp when manual override was activated (undefined if not active)
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns Remaining minutes until expiration (0 if expired or not active)
  */
 export function calculateRemainingMinutes(
   manualOverrideTimestamp: number | undefined,
@@ -48,6 +54,8 @@ export function calculateRemainingMinutes(
 
 /**
  * Calculate expiration time for manual override
+ * @param manualOverrideTimestamp - Timestamp when manual override was activated (undefined if not active)
+ * @returns Expiration timestamp in milliseconds, or undefined if not active
  */
 export function calculateExpirationTime(manualOverrideTimestamp: number | undefined): number | undefined {
   if (!manualOverrideTimestamp) {
@@ -58,6 +66,9 @@ export function calculateExpirationTime(manualOverrideTimestamp: number | undefi
 
 /**
  * Check if we should log remaining time (to avoid spam)
+ * @param lastLogTime - Timestamp of last log (undefined if never logged)
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns True if enough time has passed since last log, false otherwise
  */
 export function shouldLogRemainingTime(
   lastLogTime: number | undefined,
@@ -71,6 +82,9 @@ export function shouldLogRemainingTime(
 
 /**
  * Check if we should log expiration (only log once per expiration)
+ * @param lastExpirationLog - Timestamp of last expiration log (undefined if never logged)
+ * @param expirationTime - Expiration timestamp to check against
+ * @returns True if this expiration hasn't been logged yet, false otherwise
  */
 export function shouldLogExpiration(
   lastExpirationLog: number | undefined,
@@ -84,6 +98,9 @@ export function shouldLogExpiration(
 
 /**
  * Get complete manual override state
+ * @param manualOverrideTimestamp - Timestamp when manual override was activated (undefined if not active)
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns Complete manual override state object with isActive, remainingMinutes, timeSinceManual, and expirationTime
  */
 export function getManualOverrideState(
   manualOverrideTimestamp: number | undefined,

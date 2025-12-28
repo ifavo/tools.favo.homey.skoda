@@ -13,6 +13,10 @@ export interface ChargingContext {
 /**
  * Decide what to do with charging based on low price logic.
  * Mirrors the logic from `updatePricesAndCheckCharging` without any Homey APIs.
+ * @param cheapest - Array of cheapest price blocks
+ * @param now - Current timestamp in milliseconds
+ * @param context - Charging context with settings and state
+ * @returns Charging decision: 'turnOn', 'turnOff', or 'noChange'
  */
 export function decideLowPriceCharging(
   cheapest: Array<PriceBlock>,

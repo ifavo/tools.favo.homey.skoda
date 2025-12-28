@@ -5,6 +5,8 @@
  * It's isolated from Homey dependencies to enable comprehensive testing.
  */
 
+import { extractErrorMessage } from '../utils/errorUtils';
+
 export const BASE_URL = 'https://mysmob.api.connect.skoda-auto.cz';
 
 export interface VehicleStatus {
@@ -80,6 +82,8 @@ export interface ApiError extends Error {
 
 /**
  * Build status URL for vehicle status endpoint
+ * @param vin - Vehicle identification number
+ * @returns URL for vehicle status endpoint
  */
 export function buildStatusUrl(vin: string): string {
   return `${BASE_URL}/api/v2/vehicle-status/${vin}`;
@@ -87,6 +91,8 @@ export function buildStatusUrl(vin: string): string {
 
 /**
  * Build charging URL for vehicle charging endpoint
+ * @param vin - Vehicle identification number
+ * @returns URL for vehicle charging endpoint
  */
 export function buildChargingUrl(vin: string): string {
   return `${BASE_URL}/api/v1/charging/${vin}`;
@@ -94,6 +100,7 @@ export function buildChargingUrl(vin: string): string {
 
 /**
  * Build garage URL for listing vehicles
+ * @returns URL for garage endpoint with all connectivity generations
  */
 export function buildGarageUrl(): string {
   const generations = ['MOD1', 'MOD2', 'MOD3', 'MOD4'];
@@ -103,6 +110,8 @@ export function buildGarageUrl(): string {
 
 /**
  * Build vehicle info URL
+ * @param vin - Vehicle identification number
+ * @returns URL for vehicle info endpoint
  */
 export function buildVehicleInfoUrl(vin: string): string {
   return `${BASE_URL}/api/v2/garage/vehicles/${vin}`;
@@ -110,6 +119,8 @@ export function buildVehicleInfoUrl(vin: string): string {
 
 /**
  * Create authorization headers
+ * @param accessToken - Access token for API authentication
+ * @returns Headers object with Authorization and Content-Type
  */
 export function createAuthHeaders(accessToken: string): Record<string, string> {
   return {
@@ -119,14 +130,9 @@ export function createAuthHeaders(accessToken: string): Record<string, string> {
 }
 
 /**
- * Extract error message from error object or value
- */
-export function extractErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
  * Extract status code from error if available
+ * @param error - Error object that may contain statusCode
+ * @returns Status code if available, undefined otherwise
  */
 export function extractStatusCode(error: unknown): number | undefined {
   if (error && typeof error === 'object' && 'statusCode' in error) {
@@ -137,6 +143,8 @@ export function extractStatusCode(error: unknown): number | undefined {
 
 /**
  * Check if error is an authentication error (401 or 403)
+ * @param error - Error object to check
+ * @returns True if error is 401 or 403, false otherwise
  */
 export function isAuthError(error: unknown): boolean {
   const statusCode = extractStatusCode(error);
@@ -145,37 +153,33 @@ export function isAuthError(error: unknown): boolean {
 
 /**
  * Parse error response text with fallback
+ * @param response - Response object to parse
+ * @returns Error message text or fallback message
  */
 export async function parseErrorResponse(response: Response): Promise<string> {
   try {
     return await response.text();
-  } catch (_error) {
+  } catch (_error: unknown) {
     return 'Unable to read error response';
   }
 }
 
 /**
  * Truncate error message to max length
+ * @param message - Error message to truncate
+ * @param maxLength - Maximum length (default: 200)
+ * @returns Truncated error message
  */
 export function truncateErrorMessage(message: string, maxLength: number = 200): string {
   return message.length > maxLength ? message.substring(0, maxLength) : message;
 }
 
 /**
- * Check response and throw API error if not ok
- */
-async function checkResponseAndThrow(
-  response: Response,
-  errorMessage: string,
-): Promise<void> {
-  if (!response.ok) {
-    const text = await parseErrorResponse(response);
-    throw createApiError(errorMessage, response.status, text);
-  }
-}
-
-/**
  * Create API error with status code
+ * @param message - Error message
+ * @param statusCode - Optional HTTP status code
+ * @param responseText - Optional response text to include
+ * @returns ApiError object with status code if provided
  */
 export function createApiError(
   message: string,
@@ -193,7 +197,27 @@ export function createApiError(
 }
 
 /**
+ * Check response and throw API error if not ok
+ * @param response - Response object to check
+ * @param errorMessage - Error message prefix for the API error
+ * @throws ApiError if response is not ok
+ */
+async function checkResponseAndThrow(
+  response: Response,
+  errorMessage: string,
+): Promise<void> {
+  if (!response.ok) {
+    const text = await parseErrorResponse(response);
+    throw createApiError(errorMessage, response.status, text);
+  }
+}
+
+/**
  * Fetch vehicle status and charging info in parallel
+ * @param accessToken - Access token for API authentication
+ * @param vin - Vehicle identification number
+ * @param fetchFn - Fetch function to use (default: global fetch)
+ * @returns Vehicle status including status and charging information
  */
 export async function fetchVehicleStatus(
   accessToken: string,
@@ -218,7 +242,7 @@ export async function fetchVehicleStatus(
         headers,
       }),
     ]);
-  } catch (error) {
+  } catch (error: unknown) {
     throw new Error(`Network error: ${extractErrorMessage(error)}`);
   }
 
@@ -234,13 +258,16 @@ export async function fetchVehicleStatus(
       charging,
       timestamp: new Date().toISOString(),
     };
-  } catch (error) {
+  } catch (error: unknown) {
     throw new Error(`JSON parse error: ${extractErrorMessage(error)}`);
   }
 }
 
 /**
  * Fetch list of vehicles from garage
+ * @param accessToken - Access token for API authentication
+ * @param fetchFn - Fetch function to use (default: global fetch)
+ * @returns Array of vehicles with VIN and name
  */
 export async function fetchVehicles(
   accessToken: string,
@@ -262,6 +289,10 @@ export async function fetchVehicles(
 
 /**
  * Fetch vehicle info (specification, renders, license plate, etc.)
+ * @param accessToken - Access token for API authentication
+ * @param vin - Vehicle identification number
+ * @param fetchFn - Fetch function to use (default: global fetch)
+ * @returns Vehicle information including name, license plate, renders, and specification
  */
 export async function fetchVehicleInfo(
   accessToken: string,

@@ -10,6 +10,9 @@ export interface FormatOptions {
  * Format the "next charging times" string from cheapest price blocks.
  * - Groups consecutive 15-minute blocks into ranges
  * - Example: 11:00, 11:15, 11:30 -> "11:00–11:30"
+ * @param cheapest - Array of cheapest price blocks
+ * @param options - Format options with now, locale, and timezone
+ * @returns Formatted string with charging times (e.g., "11:00–11:30, 14:00")
  */
 export function formatNextChargingTimes(
   cheapest: Array<PriceBlock>,
@@ -80,6 +83,11 @@ interface FormatTimeOptions {
  * - Uses locale and timezone
  * - Optionally hides ":00" minutes when they are exactly zero
  * - Falls back to UTC format if locale/timezone is invalid
+ * @param date - Date object to format
+ * @param locale - Locale string (e.g., 'en-US', 'de-DE')
+ * @param timezone - Timezone string (e.g., 'Europe/Berlin', 'UTC')
+ * @param options - Format options (ignoreZeroMinutes)
+ * @returns Formatted time string (e.g., "11:00" or "11:00 PM")
  */
 export function formatTime(
   date: Date,
@@ -94,7 +102,7 @@ export function formatTime(
       hour: '2-digit',
       minute: '2-digit',
     });
-  } catch (error) {
+  } catch (error: unknown) {
     // Fall back to UTC format if locale or timezone is invalid
     str = date.toLocaleString('en-US', {
       timeZone: 'UTC',

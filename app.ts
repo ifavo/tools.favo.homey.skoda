@@ -3,6 +3,7 @@
 import Homey from 'homey';
 import { fetchVehicles, fetchVehicleInfo, BASE_URL } from './logic/skodaApi/apiClient';
 import { extractErrorMessage } from './logic/utils/errorUtils';
+import { MILLISECONDS_PER_MINUTE, MILLISECONDS_PER_HOUR } from './logic/utils/dateUtils';
 
 interface TokenResponse {
   accessToken: string;
@@ -14,7 +15,7 @@ module.exports = class SkodaApp extends Homey.App {
 
   private accessToken?: string;
   private accessTokenExpiry?: number;
-  private readonly TOKEN_REFRESH_BUFFER = 300000; // 5 minutes before expiry
+  private readonly TOKEN_REFRESH_BUFFER = 5 * MILLISECONDS_PER_MINUTE; // 5 minutes before expiry
   private lastTokenRefresh?: number; // Timestamp of last token refresh
   private readonly MIN_REFRESH_INTERVAL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
   private isRefreshingToken = false; // Flag to prevent recursive refresh calls
@@ -24,7 +25,7 @@ module.exports = class SkodaApp extends Homey.App {
    */
   async onInit() {
     // Set up global error handlers to prevent crashes
-    process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+    process.on('unhandledRejection', (reason: unknown, promise: Promise<unknown>) => {
       this.error('[UNHANDLED] Unhandled promise rejection:', extractErrorMessage(reason));
       // Don't crash - log and continue
     });
@@ -40,12 +41,12 @@ module.exports = class SkodaApp extends Homey.App {
       // Listen for settings changes with error handling
       try {
         this.homey.settings.on('set', this.onSettingsChanged.bind(this));
-      } catch (error) {
+      } catch (error: unknown) {
         const errorMessage = extractErrorMessage(error);
         this.error('[INIT] Failed to register settings listener:', errorMessage);
         // Continue initialization even if listener registration fails
       }
-    } catch (error) {
+    } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
       this.error('[INIT] Critical error during app initialization:', errorMessage);
       // Don't throw - allow app to continue running
@@ -92,7 +93,7 @@ module.exports = class SkodaApp extends Homey.App {
       if (payload.exp) {
         return payload.exp * 1000;
       }
-    } catch (err) {
+    } catch (error: unknown) {
       this.log('[TOKEN] Failed to decode token expiry, will treat as expired');
     }
     return undefined;
@@ -101,8 +102,10 @@ module.exports = class SkodaApp extends Homey.App {
   /**
    * Handle settings changes
    * Only clears cache - does NOT automatically test token to prevent infinite loops
+   * @param key - Setting key
+   * @param value - Setting value (can be any type per Homey SDK)
    */
-  async onSettingsChanged(key: string, value: any): Promise<void> {
+  async onSettingsChanged(key: string, value: unknown): Promise<void> {
     this.log(`[SETTINGS CHANGED] Key: ${key}, Event value type: ${typeof value}`);
     
     if (key === 'refresh_token') {
@@ -138,7 +141,7 @@ module.exports = class SkodaApp extends Homey.App {
               await this.homey.settings.set('_last_access_token', '');
               await this.homey.settings.set('_token_error', 'Refresh token not configured');
             }
-          } catch (error) {
+          } catch (error: unknown) {
             const errorMessage = extractErrorMessage(error);
             this.error('[SETTINGS] Token test failed:', errorMessage);
             await this.homey.settings.set('_last_access_token', '');
@@ -181,7 +184,7 @@ module.exports = class SkodaApp extends Homey.App {
         success: true,
         accessToken: accessToken
       };
-    } catch (error) {
+    } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
       this.error('Token test failed:', errorMessage);
       return {
@@ -201,7 +204,7 @@ module.exports = class SkodaApp extends Homey.App {
     if (!forceRefresh && this.lastTokenRefresh) {
       const timeSinceLastRefresh = Date.now() - this.lastTokenRefresh;
       if (timeSinceLastRefresh < this.MIN_REFRESH_INTERVAL) {
-        const remainingMinutes = Math.ceil((this.MIN_REFRESH_INTERVAL - timeSinceLastRefresh) / 60000);
+        const remainingMinutes = Math.ceil((this.MIN_REFRESH_INTERVAL - timeSinceLastRefresh) / MILLISECONDS_PER_MINUTE);
         this.log(`[TOKEN] Rate limit: Only ${remainingMinutes} minute(s) since last refresh. Using cached token if valid.`);
         
         // If we have a valid cached token, return it
@@ -291,9 +294,9 @@ module.exports = class SkodaApp extends Homey.App {
           this.accessTokenExpiry = payload.exp * 1000; // Convert to milliseconds
           this.log(`[TOKEN] Access token expires at: ${new Date(this.accessTokenExpiry).toISOString()}`);
         }
-      } catch (e) {
+      } catch (error: unknown) {
         // If we can't decode, assume 1 hour expiry
-        this.accessTokenExpiry = Date.now() + 3600000;
+        this.accessTokenExpiry = Date.now() + MILLISECONDS_PER_HOUR;
         this.log('[TOKEN] Could not decode token expiry, assuming 1 hour');
       }
 
@@ -312,13 +315,13 @@ module.exports = class SkodaApp extends Homey.App {
         await this.homey.settings.set('_last_access_token', data.accessToken);
         await this.homey.settings.set('_token_error', ''); // Clear any previous errors
         this.log('[TOKEN] Access token stored for display');
-      } catch (error) {
-        this.error('[TOKEN] Failed to store access token for display:', error);
+      } catch (error: unknown) {
+        this.error('[TOKEN] Failed to store access token for display:', extractErrorMessage(error));
         // Don't fail the whole operation if display storage fails
       }
 
       return data.accessToken;
-    } catch (error) {
+    } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
       this.error('[TOKEN] Error refreshing access token:', errorMessage);
       
@@ -326,7 +329,7 @@ module.exports = class SkodaApp extends Homey.App {
       try {
         await this.homey.settings.set('_token_error', errorMessage);
         await this.homey.settings.set('_last_access_token', '');
-      } catch (e) {
+      } catch (error: unknown) {
         // Ignore storage errors
       }
       
@@ -358,7 +361,7 @@ module.exports = class SkodaApp extends Homey.App {
         // Store for display (fire and forget)
         try {
           await this.homey.settings.set('_last_access_token', this.accessToken);
-        } catch (e) {
+        } catch (error: unknown) {
           // Ignore storage errors
         }
         return this.accessToken;
@@ -369,7 +372,7 @@ module.exports = class SkodaApp extends Homey.App {
     if (this.lastTokenRefresh) {
       const timeSinceLastRefresh = Date.now() - this.lastTokenRefresh;
       if (timeSinceLastRefresh < this.MIN_REFRESH_INTERVAL) {
-        const remainingMinutes = Math.ceil((this.MIN_REFRESH_INTERVAL - timeSinceLastRefresh) / 60000);
+        const remainingMinutes = Math.ceil((this.MIN_REFRESH_INTERVAL - timeSinceLastRefresh) / MILLISECONDS_PER_MINUTE);
         this.log(`[TOKEN] Rate limit: Only ${remainingMinutes} minute(s) since last refresh. Using cached token if available.`);
         
         // If we have a cached token (even if expired), try to use it
@@ -415,9 +418,10 @@ module.exports = class SkodaApp extends Homey.App {
     try {
       // Try the API call
       return await apiCall(accessToken);
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
-      const statusCode = error.statusCode || 
+      const errorObj = error as { statusCode?: number };
+      const statusCode = errorObj.statusCode || 
         (errorMessage.match(/\b(401|403)\b/) ? parseInt(errorMessage.match(/\b(401|403)\b/)![0]) : null);
       
       // Check if it's a 401/403 error
@@ -428,7 +432,7 @@ module.exports = class SkodaApp extends Homey.App {
           const newAccessToken = await this.handleAuthError();
           // Retry the API call with new token (only once to prevent infinite loops)
           return await apiCall(newAccessToken);
-        } catch (recoveryError) {
+        } catch (recoveryError: unknown) {
           const recoveryMessage = extractErrorMessage(recoveryError);
           this.error(`[${context}] Failed to recover from 401/403 error:`, recoveryMessage);
           throw new Error(`${context} failed: Authentication recovery failed - ${recoveryMessage}`);
