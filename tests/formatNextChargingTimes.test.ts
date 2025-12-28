@@ -144,7 +144,7 @@ describe('formatNextChargingTimes', () => {
       expect(text).not.toContain('–'); // Should not contain range separator
     });
 
-    test('excludes block starting exactly at now', () => {
+    test('includes block starting exactly at now (current period)', () => {
       const blockDuration = 15 * 60 * 1000;
       const now = Date.now();
       const block: PriceBlock = { start: now, end: now + blockDuration, price: 0.1 };
@@ -153,8 +153,10 @@ describe('formatNextChargingTimes', () => {
         locale: 'en-GB',
         timezone: 'UTC',
       });
-      // Block starts at now, so not future -> should return Unknown
-      expect(text).toBe('Unknown');
+      // Block starts at now, so we're currently in this period -> should show "Now: [time]"
+      // This keeps display synchronized with charging toggle
+      expect(text).not.toBe('Unknown');
+      expect(text).toContain('Now:');
     });
 
     test('includes block starting just after now', () => {

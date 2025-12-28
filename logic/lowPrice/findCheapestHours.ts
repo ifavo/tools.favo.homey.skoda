@@ -54,12 +54,14 @@ export function findCheapestBlocks(
   const todayBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, todayUTC));
   const cheapestToday = getCheapestBlocks(todayBlocks, count);
 
-  // Filter to only future blocks from today's cheapest
-  let cheapest = cheapestToday.filter((b) => b.start > now);
+  // Filter to include current and future blocks from today's cheapest
+  // Use b.end > now to include blocks we're currently in (synchronizes with decideLowPriceCharging logic)
+  let cheapest = cheapestToday.filter((b) => b.end > now);
 
-  // Step 2: If no future blocks from today, find cheapest blocks for TOMORROW
+  // Step 2: If no current/future blocks from today, find cheapest blocks for TOMORROW
   if (cheapest.length === 0) {
-    const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, tomorrowUTC) && b.start > now);
+    // Include blocks that haven't ended yet (current or future)
+    const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, tomorrowUTC) && b.end > now);
     cheapest = getCheapestBlocks(tomorrowBlocks, count);
   }
 

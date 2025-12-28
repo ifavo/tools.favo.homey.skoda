@@ -311,5 +311,123 @@ describe('findCheapestBlocks', () => {
       expect(result.length).toBeGreaterThanOrEqual(0);
     });
   });
+
+  describe('bug reproduction - 23:45 Berlin time block inclusion', () => {
+    /**
+     * Test-First Bug Fix Demonstration
+     * 
+     * This test reproduces the bug where blocks at 23:45 Berlin time (or any time)
+     * were not included when:
+     * 1. Block starts exactly at now (b.start === now)
+     * 2. We're currently in the block (b.start < now < b.end)
+     * 
+     * The old bug: filter used b.start > now, which excluded:
+     * - Blocks starting exactly at now
+     * - Blocks we're currently in
+     * 
+     * The fix: changed filter to b.end > now, which includes:
+     * - Blocks starting exactly at now (b.end > now is true)
+     * - Blocks we're currently in (b.end > now is true)
+     * 
+     * This test would have FAILED with the old code, demonstrating test-first approach.
+     */
+    test('includes block starting exactly at now (23:45 Berlin time)', () => {
+      // Reproduce bug: block at 23:45 Berlin time should be included when we're at 23:45
+      // Berlin time is UTC+1 in winter, UTC+2 in summer
+      // 23:45 Berlin time = 22:45 UTC (winter) or 21:45 UTC (summer)
+      
+      // Use winter time (UTC+1) for this test
+      // 23:45 Berlin time = 22:45 UTC
+      const berlinTime = new Date('2025-12-18T23:45:00+01:00'); // 23:45 Berlin time
+      const utcTime = new Date('2025-12-18T22:45:00Z'); // 22:45 UTC (same moment)
+      const now = utcTime.getTime();
+      
+      const blockDuration = 15 * 60 * 1000; // 15 minutes
+      const blockStart = now; // Block starts exactly at now
+      const blockEnd = blockStart + blockDuration;
+      
+      const testCache: PriceCache = {
+        [String(blockStart)]: {
+          start: blockStart,
+          end: blockEnd,
+          price: 0.1, // Cheapest price
+        },
+      };
+      
+      // This test would FAIL with the old bug (b.start > now filter)
+      // The block starts exactly at now, so b.start > now is false → block excluded
+      // With the fix (b.end > now), the block should be included
+      const result = findCheapestBlocks(testCache, 1, now);
+      
+      expect(result.length).toBe(1);
+      expect(result[0].start).toBe(blockStart);
+      expect(result[0].end).toBe(blockEnd);
+    });
+
+    test('includes block when we are currently in it (23:46 Berlin time)', () => {
+      // Test when we're in the middle of the block
+      // 23:45 Berlin time = 22:45 UTC, block runs 23:45-00:00 Berlin time
+      // At 23:46 Berlin time (22:46 UTC), we're in the block
+      
+      const berlinTime = new Date('2025-12-18T23:45:00+01:00'); // 23:45 Berlin time
+      const blockStart = berlinTime.getTime();
+      const blockDuration = 15 * 60 * 1000;
+      const blockEnd = blockStart + blockDuration;
+      
+      // Now we're at 23:46 Berlin time (1 minute into the block)
+      const nowAt2346 = new Date('2025-12-18T23:46:00+01:00').getTime();
+      
+      const testCache: PriceCache = {
+        [String(blockStart)]: {
+          start: blockStart,
+          end: blockEnd,
+          price: 0.1,
+        },
+      };
+      
+      // This test would FAIL with the old bug (b.start > now filter)
+      // b.start < now (we're in the middle), so b.start > now is false → block excluded
+      // With the fix (b.end > now), the block should be included
+      const result = findCheapestBlocks(testCache, 1, nowAt2346);
+      
+      expect(result.length).toBe(1);
+      expect(result[0].start).toBe(blockStart);
+    });
+
+    test('decideLowPriceCharging toggles ON when block is included at 23:45', () => {
+      // Integration test: verify that when block is included, charging decision is correct
+      const { decideLowPriceCharging } = require('../logic/lowPrice/decideLowPriceCharging');
+      
+      const berlinTime = new Date('2025-12-18T23:45:00+01:00');
+      const now = berlinTime.getTime();
+      const blockDuration = 15 * 60 * 1000;
+      
+      const block: PriceBlock = {
+        start: now,
+        end: now + blockDuration,
+        price: 0.1,
+      };
+      
+      // Block should be included in cheapest blocks
+      const testCache: PriceCache = {
+        [String(block.start)]: block,
+      };
+      const cheapest = findCheapestBlocks(testCache, 1, now);
+      
+      expect(cheapest.length).toBe(1);
+      
+      // Now verify charging decision
+      const decision = decideLowPriceCharging(cheapest, now, {
+        enableLowPrice: true,
+        batteryLevel: 80,
+        lowBatteryThreshold: 40,
+        manualOverrideActive: false,
+        wasOnDueToPrice: false,
+      });
+      
+      // Should decide to turn ON because we're in the cheapest period
+      expect(decision).toBe('turnOn');
+    });
+  });
 });
 

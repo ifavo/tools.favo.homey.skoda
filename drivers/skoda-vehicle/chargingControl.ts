@@ -10,7 +10,7 @@ import {
 } from '../../logic/manualOverride/timing';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
 import { getSettingWithDefault, getTimezone } from './deviceHelpers';
-import { loadPriceCache, findCheapestBlocksWithLogging, updatePriceStatus } from './priceManager';
+import { loadPriceCache, findCheapestBlocksWithLogging } from './priceManager';
 
 /**
  * Charging control state interface
@@ -273,10 +273,6 @@ export async function checkLowPriceCharging(
       device.log('[LOW_PRICE] Current time is NOT in cheapest period, turning OFF self onoff');
       await turnOffChargingSelf(device, state);
     }
-    // noChange - decision logic already handled the reason
-
-    // Update status with next cheap times
-    await updatePriceStatus(device, cheapest, timezone);
 
   } catch (error: unknown) {
     const errorMessage = extractErrorMessage(error);

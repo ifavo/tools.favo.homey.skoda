@@ -9,6 +9,7 @@ export interface FormatOptions {
 /**
  * Format the "next charging times" string from cheapest price blocks.
  * - Groups consecutive 15-minute blocks into ranges
+ * - Includes current period if we're currently in a cheapest period
  * - Example: 11:00, 11:15, 11:30 -> "11:00–11:30"
  * @param cheapest - Array of cheapest price blocks
  * @param options - Format options with now, locale, and timezone
@@ -20,31 +21,40 @@ export function formatNextChargingTimes(
 ): string {
   const { now, locale, timezone } = options;
 
-  const future = cheapest
-    .filter((b) => b.start > now)
+  // Include current period (if we're in it) and future periods
+  // This ensures display stays synchronized with charging toggle
+  const relevant = cheapest
+    .filter((b) => b.end > now) // Include blocks that haven't ended yet
     .sort((a, b) => a.start - b.start);
 
-  if (future.length === 0) {
+  if (relevant.length === 0) {
     return 'Unknown';
   }
 
   // Group consecutive 15-minute blocks into ranges
   // Track which blocks belong to each group
-  const groups: Array<{ start: number; end: number; blockCount: number }> = [];
+  const groups: Array<{ start: number; end: number; blockCount: number; isCurrent: boolean }> = [];
 
-  let currentStart = future[0].start;
-  let currentEnd = future[0].end;
+  let currentStart = relevant[0].start;
+  let currentEnd = relevant[0].end;
   let currentBlockCount = 1;
 
-  for (let i = 1; i < future.length; i++) {
-    const block = future[i];
+  for (let i = 1; i < relevant.length; i++) {
+    const block = relevant[i];
 
     // If this block starts exactly when the previous one ended, extend the range
     if (block.start === currentEnd) {
       currentEnd = block.end;
       currentBlockCount++;
     } else {
-      groups.push({ start: currentStart, end: currentEnd, blockCount: currentBlockCount });
+      // Check if current group is the active period
+      const isCurrent = currentStart <= now && now < currentEnd;
+      groups.push({ 
+        start: currentStart, 
+        end: currentEnd, 
+        blockCount: currentBlockCount,
+        isCurrent,
+      });
       currentStart = block.start;
       currentEnd = block.end;
       currentBlockCount = 1;
@@ -52,7 +62,13 @@ export function formatNextChargingTimes(
   }
 
   // Push last group
-  groups.push({ start: currentStart, end: currentEnd, blockCount: currentBlockCount });
+  const lastIsCurrent = currentStart <= now && now < currentEnd;
+  groups.push({ 
+    start: currentStart, 
+    end: currentEnd, 
+    blockCount: currentBlockCount,
+    isCurrent: lastIsCurrent,
+  });
 
   return groups
     .map((g) => {
@@ -61,15 +77,17 @@ export function formatNextChargingTimes(
 
       // If group contains exactly one block, show as single time (not consecutive)
       if (g.blockCount === 1) {
-        // Single block: show just the start time (e.g., "11:45")
-        return formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
+        // Single block: show just the start time (e.g., "11:45" or "Now: 11:45")
+        const timeStr = formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
+        return g.isCurrent ? `Now: ${timeStr}` : timeStr;
       }
 
-      // Consecutive blocks: show range from start to end (e.g., "11:45-12:15")
+      // Consecutive blocks: show range from start to end (e.g., "11:45-12:15" or "Now: 11:45-12:15")
       const startStr = formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
       const endStr = formatTime(endDate, locale, timezone, { ignoreZeroMinutes: false });
+      const rangeStr = `${startStr}–${endStr}`;
 
-      return `${startStr}–${endStr}`;
+      return g.isCurrent ? `Now: ${rangeStr}` : rangeStr;
     })
     .join(', ');
 }
