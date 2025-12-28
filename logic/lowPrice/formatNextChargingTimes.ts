@@ -79,6 +79,7 @@ interface FormatTimeOptions {
  * Format time for display.
  * - Uses locale and timezone
  * - Optionally hides ":00" minutes when they are exactly zero
+ * - Falls back to UTC format if locale/timezone is invalid
  */
 export function formatTime(
   date: Date,
@@ -86,11 +87,21 @@ export function formatTime(
   timezone: string,
   options: FormatTimeOptions = {},
 ): string {
-  const str = date.toLocaleString(locale, {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  let str: string;
+  try {
+    str = date.toLocaleString(locale, {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (error) {
+    // Fall back to UTC format if locale or timezone is invalid
+    str = date.toLocaleString('en-US', {
+      timeZone: 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
 
   // If we don't ignore zero minutes, return as-is
   if (!options.ignoreZeroMinutes) {

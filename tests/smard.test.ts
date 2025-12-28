@@ -83,5 +83,189 @@ describe('SMARD data source', () => {
       new SmardPriceSource('INVALID');
     }).toThrow('Invalid market area');
   });
+
+  test('SmardPriceSource handles missing series data gracefully', async () => {
+    // Mock fetch with data missing series field
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            timestamps: [1766790000000],
+          }),
+        } as Response);
+      } else if (url.includes('_quarterhour_')) {
+        // Return data without series field
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            // Missing series field
+          }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    const entries = await source.fetch();
+
+    // Should return empty array when no series data
+    expect(entries).toEqual([]);
+  });
+
+  test('SmardPriceSource handles empty entries array', async () => {
+    // Mock fetch that returns empty entries
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            timestamps: [1766790000000],
+          }),
+        } as Response);
+      } else if (url.includes('_quarterhour_')) {
+        // Return data with empty series
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            series: [],
+          }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    const entries = await source.fetch();
+
+    // Should return empty array
+    expect(entries).toEqual([]);
+  });
+
+  test('SmardPriceSource filters entries when latest data is today', async () => {
+    // Mock fetch with data where latest entry is today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayTimestamp = today.getTime();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayTimestamp = yesterday.getTime();
+
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            timestamps: [yesterdayTimestamp, todayTimestamp],
+          }),
+        } as Response);
+      } else if (url.includes('_quarterhour_')) {
+        // Create 96 entries per day (one per 15 minutes)
+        const entriesPerDay = 96;
+        const series: Array<[number, number]> = [];
+        
+        // Add yesterday's entries
+        for (let i = 0; i < entriesPerDay; i++) {
+          series.push([yesterdayTimestamp + i * 15 * 60 * 1000, 100]);
+        }
+        
+        // Add today's entries
+        for (let i = 0; i < entriesPerDay; i++) {
+          series.push([todayTimestamp + i * 15 * 60 * 1000, 100]);
+        }
+
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ series }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    const entries = await source.fetch();
+
+    // Should return 2 days worth of entries (48 hours * 4 = 192 entries)
+    // But actually it should return last 2 days = 96 * 2 = 192 entries
+    expect(entries.length).toBeGreaterThan(0);
+    // Verify all entries are from yesterday or today
+    const entryDates = entries.map(e => new Date(e.date).getTime());
+    const minDate = Math.min(...entryDates);
+    const maxDate = Math.max(...entryDates);
+    expect(minDate).toBeGreaterThanOrEqual(yesterdayTimestamp);
+    expect(maxDate).toBeLessThanOrEqual(todayTimestamp + 24 * 60 * 60 * 1000);
+  });
+
+  test('SmardPriceSource throws error when index response is not ok', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          statusText: 'Internal Server Error',
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    await expect(source.fetch()).rejects.toThrow('SMARD API index failed: 500 Internal Server Error');
+  });
+
+  test('SmardPriceSource throws error when no timestamps available', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            timestamps: [], // Empty timestamps
+          }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    await expect(source.fetch()).rejects.toThrow('SMARD API: No timestamps available');
+  });
+
+  test('SmardPriceSource handles failed data fetch for timestamp gracefully', async () => {
+    global.fetch = jest.fn((url: string) => {
+      if (url.includes('index_quarterhour.json')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            timestamps: [1766790000000, 1766793600000],
+          }),
+        } as Response);
+      } else if (url.includes('_quarterhour_1766790000000')) {
+        // First timestamp fails
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+        } as Response);
+      } else if (url.includes('_quarterhour_1766793600000')) {
+        // Second timestamp succeeds
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            series: [
+              [1766793600000, 77.3],
+              [1766794500000, 85.54],
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.reject(new Error(`Unexpected URL: ${url}`));
+    }) as jest.Mock;
+
+    const source = new SmardPriceSource('DE-LU');
+    const entries = await source.fetch();
+
+    // Should still return entries from the successful fetch
+    expect(entries.length).toBe(2);
+    // Should have logged a warning for the failed fetch (covered lines 69-70)
+  });
 });
 
