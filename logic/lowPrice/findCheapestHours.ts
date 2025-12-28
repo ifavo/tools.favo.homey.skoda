@@ -5,6 +5,7 @@ import type { PriceBlock, PriceCache } from './types';
  * - Only the raw price data is cached in `price_cache`
  * - This function always recalculates the cheapest blocks using the current `count`
  * - `now` is passed in for testability; defaults to current time.
+ * - Finds the cheapest individual blocks (not necessarily consecutive)
  */
 export function findCheapestBlocks(
   cache: PriceCache,
@@ -23,32 +24,17 @@ export function findCheapestBlocks(
     return [];
   }
 
-  // Sort by time so we can look for the cheapest *consecutive* window
-  const byTime = [...relevantBlocks].sort((a, b) => a.start - b.start);
+  // Sort by price to find cheapest individual blocks
+  const sortedByPrice = [...relevantBlocks].sort((a, b) => a.price - b.price);
 
-  if (count >= byTime.length) {
-    return byTime;
+  if (count >= sortedByPrice.length) {
+    // Sort by time for consistent ordering when returning all blocks
+    return sortedByPrice.sort((a, b) => a.start - b.start);
   }
 
-  // Sliding window over consecutive blocks
-  let bestStartIndex = 0;
-  let bestSum = Number.POSITIVE_INFINITY;
+  // Get cheapest N blocks
+  const cheapest = sortedByPrice.slice(0, count);
 
-  // Initial window
-  let currentSum = 0;
-  for (let i = 0; i < count; i++) {
-    currentSum += byTime[i].price;
-  }
-  bestSum = currentSum;
-
-  // Move the window one block at a time
-  for (let end = count; end < byTime.length; end++) {
-    currentSum += byTime[end].price - byTime[end - count].price;
-    if (currentSum < bestSum) {
-      bestSum = currentSum;
-      bestStartIndex = end - count + 1;
-    }
-  }
-
-  return byTime.slice(bestStartIndex, bestStartIndex + count);
+  // Sort result by time for consistent ordering
+  return cheapest.sort((a, b) => a.start - b.start);
 }

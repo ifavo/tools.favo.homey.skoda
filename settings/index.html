@@ -77,6 +77,18 @@
       <div id="access_token_display" class="token-display empty">Not loaded yet. Click "Test Token" to refresh.</div>
       <p class="homey-form-help">This is the current access token obtained from your refresh token. It will be automatically refreshed when needed.</p>
     </div>
+
+    <div class="homey-form-group">
+      <label class="homey-form-label" for="tibber_token">Tibber API Token</label>
+      <input 
+        type="text" 
+        id="tibber_token" 
+        name="tibber_token" 
+        class="homey-form-input" 
+        placeholder="Enter your Tibber API token (optional)"
+      />
+      <p class="homey-form-help">Enter your Tibber API token for electricity price data. If left empty, SMARD API will be used as the data source instead. Get your Tibber token from <a href="https://developer.tibber.com/" target="_blank">Tibber Developer Portal</a>.</p>
+    </div>
     
     <button class="homey-button-primary homey-button-full" type="submit">Save</button>
   </form>
@@ -84,6 +96,7 @@
   <script>
     function onHomeyReady(Homey) {
       const refreshTokenInput = document.getElementById('refresh_token');
+      const tibberTokenInput = document.getElementById('tibber_token');
       const testButton = document.getElementById('test-token');
       const testStatus = document.getElementById('test-status');
       const accessTokenDisplay = document.getElementById('access_token_display');
@@ -98,6 +111,13 @@
         setTimeout(loadAccessToken, 500);
         setTimeout(loadAccessToken, 1500);
         setTimeout(loadAccessToken, 3000);
+      });
+
+      // Load Tibber token setting
+      Homey.get('tibber_token', function(err, value) {
+        if (!err && value) {
+          tibberTokenInput.value = value;
+        }
       });
 
       function loadAccessToken() {
@@ -230,23 +250,34 @@
       document.querySelector('.homey-form').addEventListener('submit', function(event) {
         event.preventDefault();
         const refreshToken = refreshTokenInput.value.trim();
+        const tibberToken = tibberTokenInput.value.trim();
         
         if (!refreshToken) {
           Homey.alert('Please enter a refresh token.', 'error');
           return;
         }
 
+        // Save both tokens
         Homey.set('refresh_token', refreshToken, function(err) {
           if (err) {
-            Homey.alert('Failed to save settings: ' + err.message, 'error');
+            Homey.alert('Failed to save refresh token: ' + err.message, 'error');
             return;
           }
-          Homey.alert('Settings saved successfully.', 'success');
-          // Auto-test after saving (by setting the test flag)
-          Homey.set('_test_token_flag', true, function(flagErr) {
-            if (flagErr) {
-              console.error('Failed to trigger token test:', flagErr);
+          
+          // Save Tibber token (can be empty, will use SMARD if not set)
+          Homey.set('tibber_token', tibberToken, function(tibberErr) {
+            if (tibberErr) {
+              Homey.alert('Failed to save Tibber token: ' + tibberErr.message, 'error');
+              return;
             }
+            
+            Homey.alert('Settings saved successfully.', 'success');
+            // Auto-test after saving (by setting the test flag)
+            Homey.set('_test_token_flag', true, function(flagErr) {
+              if (flagErr) {
+                console.error('Failed to trigger token test:', flagErr);
+              }
+            });
           });
         });
       });

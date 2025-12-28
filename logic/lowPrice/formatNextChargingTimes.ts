@@ -26,10 +26,12 @@ export function formatNextChargingTimes(
   }
 
   // Group consecutive 15-minute blocks into ranges
-  const groups: Array<{ start: number; end: number }> = [];
+  // Track which blocks belong to each group
+  const groups: Array<{ start: number; end: number; blockCount: number }> = [];
 
   let currentStart = future[0].start;
   let currentEnd = future[0].end;
+  let currentBlockCount = 1;
 
   for (let i = 1; i < future.length; i++) {
     const block = future[i];
@@ -37,28 +39,30 @@ export function formatNextChargingTimes(
     // If this block starts exactly when the previous one ended, extend the range
     if (block.start === currentEnd) {
       currentEnd = block.end;
+      currentBlockCount++;
     } else {
-      groups.push({ start: currentStart, end: currentEnd });
+      groups.push({ start: currentStart, end: currentEnd, blockCount: currentBlockCount });
       currentStart = block.start;
       currentEnd = block.end;
+      currentBlockCount = 1;
     }
   }
 
   // Push last group
-  groups.push({ start: currentStart, end: currentEnd });
+  groups.push({ start: currentStart, end: currentEnd, blockCount: currentBlockCount });
 
   return groups
     .map((g) => {
       const startDate = new Date(g.start);
       const endDate = new Date(g.end);
 
-      // If range is exactly one 15-minute block, show as single time
-      const blockDurationMs = 15 * 60 * 1000; // 15 minutes
-      if (g.end - g.start === blockDurationMs) {
+      // If group contains exactly one block, show as single time (not consecutive)
+      if (g.blockCount === 1) {
+        // Single block: show just the start time (e.g., "11:45")
         return formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
       }
 
-      // Timeframe: show full start and end times for 15-minute blocks
+      // Consecutive blocks: show range from start to end (e.g., "11:45-12:15")
       const startStr = formatTime(startDate, locale, timezone, { ignoreZeroMinutes: false });
       const endStr = formatTime(endDate, locale, timezone, { ignoreZeroMinutes: false });
 
@@ -105,7 +109,3 @@ export function formatTime(
 
   return str;
 }
-
-
-
-
