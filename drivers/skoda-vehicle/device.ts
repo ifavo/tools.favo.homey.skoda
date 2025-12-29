@@ -8,7 +8,7 @@ import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { decideLowPriceCharging } from '../../logic/lowPrice/decideLowPriceCharging';
 import { MANUAL_OVERRIDE_DURATION as OVERRIDE_DURATION } from '../../logic/manualOverride/timing';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
-import { MILLISECONDS_PER_MINUTE, MILLISECONDS_PER_HOUR, MILLISECONDS_PER_DAY } from '../../logic/utils/dateUtils';
+import { MILLISECONDS_PER_MINUTE, MILLISECONDS_PER_HOUR, MILLISECONDS_PER_DAY, getMillisecondsUntilNext15MinuteBoundary } from '../../logic/utils/dateUtils';
 import { resolveVin, getSettingWithDefault, getTimezone } from './deviceHelpers';
 import {
   loadPriceCache,
@@ -34,6 +34,7 @@ class SkodaVehicleDevice extends Homey.Device {
 
   private pollingInterval?: NodeJS.Timeout;
   private priceUpdateInterval?: NodeJS.Timeout;
+  private priceUpdateBoundaryTimeout?: ReturnType<typeof this.homey.setTimeout>;
   private infoUpdateInterval?: NodeJS.Timeout;
   private readonly POLL_INTERVAL = 60 * MILLISECONDS_PER_MINUTE; // 60 seconds
   private readonly PRICE_UPDATE_INTERVAL = 15 * MILLISECONDS_PER_MINUTE; // 15 minutes
@@ -218,11 +219,16 @@ class SkodaVehicleDevice extends Homey.Device {
   /**
    * Start price update interval (runs every 15 minutes) with error recovery
    * Always runs to update next charging times display, even if low price charging is disabled
+   * Aligns to 15-minute block boundaries (:00, :15, :30, :45) to match price data intervals
    */
   async startPriceUpdates(): Promise<void> {
     this.stopPriceUpdates();
 
-    // Initial price update with error handling
+    // Calculate delay until next 15-minute boundary
+    const now = Date.now();
+    const delayUntilBoundary = getMillisecondsUntilNext15MinuteBoundary(now);
+    
+    // Initial price update with error handling (run immediately to populate cache)
     try {
       await this.updatePricesAndCheckCharging();
     } catch (error: unknown) {
@@ -238,16 +244,30 @@ class SkodaVehicleDevice extends Homey.Device {
       // Don't throw - continue to set up interval
     }
 
-    // Set up interval with comprehensive error handling
-    this.priceUpdateInterval = this.homey.setInterval(() => {
+    // Schedule first update at the next 15-minute boundary
+    this.priceUpdateBoundaryTimeout = this.homey.setTimeout(() => {
+      // Clear the timeout reference since it's now executed
+      this.priceUpdateBoundaryTimeout = undefined;
+      
+      // Run update at boundary
       this.updatePricesAndCheckCharging().catch((error: unknown) => {
         const errorMessage = extractErrorMessage(error);
         this.error('[LOW_PRICE] Price update failed:', errorMessage);
-        // Don't crash - interval will retry on next cycle
       });
-    }, this.PRICE_UPDATE_INTERVAL);
+      
+      // Then set up regular interval aligned to boundaries
+      this.priceUpdateInterval = this.homey.setInterval(() => {
+        this.updatePricesAndCheckCharging().catch((error: unknown) => {
+          const errorMessage = extractErrorMessage(error);
+          this.error('[LOW_PRICE] Price update failed:', errorMessage);
+          // Don't crash - interval will retry on next cycle
+        });
+      }, this.PRICE_UPDATE_INTERVAL);
+    }, delayUntilBoundary);
 
-    this.log(`[LOW_PRICE] Started price update interval (every ${this.PRICE_UPDATE_INTERVAL / MILLISECONDS_PER_MINUTE} minutes)`);
+    const nextBoundaryDate = new Date(now + delayUntilBoundary);
+    const nextBoundaryTime = nextBoundaryDate.toLocaleTimeString();
+    this.log(`[LOW_PRICE] Started price update interval (every ${this.PRICE_UPDATE_INTERVAL / MILLISECONDS_PER_MINUTE} minutes), first update at ${nextBoundaryTime} (aligned to 15-minute boundaries)`);
   }
 
   /**
@@ -257,6 +277,12 @@ class SkodaVehicleDevice extends Homey.Device {
     if (this.priceUpdateInterval) {
       this.homey.clearInterval(this.priceUpdateInterval);
       this.priceUpdateInterval = undefined;
+    }
+    if (this.priceUpdateBoundaryTimeout !== undefined) {
+      this.homey.clearTimeout(this.priceUpdateBoundaryTimeout);
+      this.priceUpdateBoundaryTimeout = undefined;
+    }
+    if (this.priceUpdateInterval || this.priceUpdateBoundaryTimeout !== undefined) {
       this.log('[LOW_PRICE] Stopped price update interval');
     }
   }

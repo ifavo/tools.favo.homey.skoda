@@ -6,6 +6,7 @@ import {
   getUTCDate,
   getTodayUTCDate,
   getTomorrowUTCDate,
+  getMillisecondsUntilNext15MinuteBoundary,
   MILLISECONDS_PER_DAY,
   MILLISECONDS_PER_HOUR,
   MILLISECONDS_PER_MINUTE,
@@ -194,6 +195,192 @@ describe('Date Utilities', () => {
       expect(result1).toBe(result2);
       expect(result2).toBe(result3);
       expect(result1).toBe(18);
+    });
+  });
+
+  describe('getMillisecondsUntilNext15MinuteBoundary', () => {
+    const FIFTEEN_MINUTES_MS = 15 * MILLISECONDS_PER_MINUTE;
+
+    test('calculates correct delay for time before first boundary (00:00)', () => {
+      // 01:11 -> should go to 01:15 (4 minutes = 240000 ms)
+      const timestamp = new Date('2025-12-18T01:11:30.500Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 4 * MILLISECONDS_PER_MINUTE - (30 * 1000 + 500); // 4 min - 30.5 sec
+      expect(delay).toBe(expected);
+      expect(delay).toBeGreaterThan(0);
+      expect(delay).toBeLessThan(FIFTEEN_MINUTES_MS);
+    });
+
+    test('calculates correct delay for time in first block (00:00-00:14)', () => {
+      // 01:05:30 -> should go to 01:15:00 (9 minutes 30 seconds = 570000 ms)
+      const timestamp = new Date('2025-12-18T01:05:30.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 9 * MILLISECONDS_PER_MINUTE + 30 * 1000;
+      expect(delay).toBe(expected);
+    });
+
+    test('calculates correct delay for time in second block (00:15-00:29)', () => {
+      // 01:26:45 -> should go to 01:30:00 (3 minutes 15 seconds = 195000 ms)
+      const timestamp = new Date('2025-12-18T01:26:45.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 3 * MILLISECONDS_PER_MINUTE + 15 * 1000;
+      expect(delay).toBe(expected);
+    });
+
+    test('calculates correct delay for time in third block (00:30-00:44)', () => {
+      // 01:35:20 -> should go to 01:45:00 (9 minutes 40 seconds = 580000 ms)
+      const timestamp = new Date('2025-12-18T01:35:20.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 9 * MILLISECONDS_PER_MINUTE + 40 * 1000;
+      expect(delay).toBe(expected);
+    });
+
+    test('calculates correct delay for time in fourth block (00:45-00:59)', () => {
+      // 01:56:10 -> should go to 02:00:00 (3 minutes 50 seconds = 230000 ms)
+      const timestamp = new Date('2025-12-18T01:56:10.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 3 * MILLISECONDS_PER_MINUTE + 50 * 1000;
+      expect(delay).toBe(expected);
+    });
+
+    test('handles exactly on boundary - moves to next boundary', () => {
+      // 01:15:00 -> should go to 01:30:00 (15 minutes)
+      const timestamp = new Date('2025-12-18T01:15:00.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(FIFTEEN_MINUTES_MS);
+    });
+
+    test('handles exactly on :00 boundary', () => {
+      // 01:00:00 -> should go to 01:15:00 (15 minutes)
+      const timestamp = new Date('2025-12-18T01:00:00.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(FIFTEEN_MINUTES_MS);
+    });
+
+    test('handles exactly on :30 boundary', () => {
+      // 01:30:00 -> should go to 01:45:00 (15 minutes)
+      const timestamp = new Date('2025-12-18T01:30:00.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(FIFTEEN_MINUTES_MS);
+    });
+
+    test('handles exactly on :45 boundary', () => {
+      // 01:45:00 -> should go to 02:00:00 (15 minutes)
+      const timestamp = new Date('2025-12-18T01:45:00.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(FIFTEEN_MINUTES_MS);
+    });
+
+    test('handles end of hour correctly (wraps to next hour)', () => {
+      // 01:59:30 -> should go to 02:00:00 (30 seconds)
+      const timestamp = new Date('2025-12-18T01:59:30.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(30 * 1000);
+    });
+
+    test('handles milliseconds correctly', () => {
+      // 01:11:30.500 -> should go to 01:15:00 (3 min 29.5 sec = 209500 ms)
+      const timestamp = new Date('2025-12-18T01:11:30.500Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 3 * MILLISECONDS_PER_MINUTE + 29 * 1000 + 500;
+      expect(delay).toBe(expected);
+    });
+
+    test('handles just before boundary (1 second before)', () => {
+      // 01:14:59 -> should go to 01:15:00 (1 second)
+      const timestamp = new Date('2025-12-18T01:14:59.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(1000);
+    });
+
+    test('handles just after boundary (1 second after)', () => {
+      // 01:15:01 -> should go to 01:30:00 (14 min 59 sec)
+      const timestamp = new Date('2025-12-18T01:15:01.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const expected = 14 * MILLISECONDS_PER_MINUTE + 59 * 1000;
+      expect(delay).toBe(expected);
+    });
+
+    test('returns positive delay for all times', () => {
+      // Test various times throughout the day
+      const testTimes = [
+        '2025-12-18T00:00:00.000Z',
+        '2025-12-18T00:07:30.000Z',
+        '2025-12-18T00:15:00.000Z',
+        '2025-12-18T00:22:45.000Z',
+        '2025-12-18T00:30:00.000Z',
+        '2025-12-18T00:37:15.000Z',
+        '2025-12-18T00:45:00.000Z',
+        '2025-12-18T00:52:30.000Z',
+        '2025-12-18T01:00:00.000Z',
+        '2025-12-18T12:30:00.000Z',
+        '2025-12-18T23:45:00.000Z',
+        '2025-12-18T23:59:59.999Z',
+      ];
+
+      testTimes.forEach((timeStr) => {
+        const timestamp = new Date(timeStr).getTime();
+        const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+        expect(delay).toBeGreaterThan(0);
+        expect(delay).toBeLessThanOrEqual(FIFTEEN_MINUTES_MS);
+      });
+    });
+
+    test('delay is always less than or equal to 15 minutes', () => {
+      // Test random times
+      for (let hour = 0; hour < 24; hour++) {
+        for (let minute = 0; minute < 60; minute += 7) {
+          const timestamp = new Date(`2025-12-18T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00.000Z`).getTime();
+          const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+          expect(delay).toBeGreaterThan(0);
+          expect(delay).toBeLessThanOrEqual(FIFTEEN_MINUTES_MS);
+        }
+      }
+    });
+
+    test('works with Date.now() when no argument provided', () => {
+      const now = Date.now();
+      const delay = getMillisecondsUntilNext15MinuteBoundary();
+      expect(delay).toBeGreaterThan(0);
+      expect(delay).toBeLessThanOrEqual(FIFTEEN_MINUTES_MS);
+    });
+
+    test('verifies actual boundary time is correct', () => {
+      // 01:11:30 -> should result in boundary at 01:15:00
+      const timestamp = new Date('2025-12-18T01:11:30.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const boundaryTime = timestamp + delay;
+      const boundaryDate = new Date(boundaryTime);
+      
+      expect(boundaryDate.getUTCMinutes()).toBe(15);
+      expect(boundaryDate.getUTCSeconds()).toBe(0);
+      expect(boundaryDate.getUTCMilliseconds()).toBe(0);
+    });
+
+    test('verifies boundary wraps to next hour correctly', () => {
+      // 01:56:30 -> should result in boundary at 02:00:00
+      const timestamp = new Date('2025-12-18T01:56:30.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      const boundaryTime = timestamp + delay;
+      const boundaryDate = new Date(boundaryTime);
+      
+      expect(boundaryDate.getUTCHours()).toBe(2);
+      expect(boundaryDate.getUTCMinutes()).toBe(0);
+      expect(boundaryDate.getUTCSeconds()).toBe(0);
+      expect(boundaryDate.getUTCMilliseconds()).toBe(0);
+    });
+
+    test('handles edge case: 23:59:59 wraps to 00:00:00 next day', () => {
+      // 23:59:59 -> should go to 00:00:00 next day
+      const timestamp = new Date('2025-12-18T23:59:59.000Z').getTime();
+      const delay = getMillisecondsUntilNext15MinuteBoundary(timestamp);
+      expect(delay).toBe(1000); // 1 second
+      
+      const boundaryTime = timestamp + delay;
+      const boundaryDate = new Date(boundaryTime);
+      expect(boundaryDate.getUTCHours()).toBe(0);
+      expect(boundaryDate.getUTCMinutes()).toBe(0);
+      expect(boundaryDate.getUTCDate()).toBe(19); // Next day
     });
   });
 });

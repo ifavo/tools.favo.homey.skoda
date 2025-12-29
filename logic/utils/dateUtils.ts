@@ -47,3 +47,43 @@ export function getTomorrowUTCDate(now: number = Date.now()): number {
   return getUTCDate(now + MILLISECONDS_PER_DAY);
 }
 
+/**
+ * Calculate milliseconds until the next 15-minute boundary
+ * Aligns to :00, :15, :30, :45 minutes past the hour
+ * @param now - Current timestamp in milliseconds (defaults to Date.now())
+ * @returns Milliseconds until the next 15-minute boundary
+ */
+export function getMillisecondsUntilNext15MinuteBoundary(now: number = Date.now()): number {
+  const date = new Date(now);
+  const minutes = date.getMinutes();
+  const seconds = date.getSeconds();
+  const milliseconds = date.getMilliseconds();
+  
+  // Calculate which 15-minute block we're in (0, 1, 2, or 3)
+  const currentBlock = Math.floor(minutes / 15);
+  
+  // Calculate the next block (always move to next, even if exactly on boundary)
+  const nextBlock = currentBlock + 1;
+  
+  // Calculate the target minutes for the next block
+  let targetMinutes = nextBlock * 15;
+  
+  // If we've passed the last block of the hour (45), wrap to next hour
+  let targetTime = new Date(now);
+  if (targetMinutes >= 60) {
+    targetTime.setHours(targetTime.getHours() + 1);
+    targetTime.setMinutes(0);
+  } else {
+    targetTime.setMinutes(targetMinutes);
+  }
+  
+  // Always set seconds and milliseconds to 0 for clean boundaries
+  targetTime.setSeconds(0);
+  targetTime.setMilliseconds(0);
+  
+  const delay = targetTime.getTime() - now;
+  
+  // Ensure we return a positive delay (should always be, but handle edge cases)
+  return delay > 0 ? delay : delay + (15 * MILLISECONDS_PER_MINUTE);
+}
+
