@@ -14,6 +14,43 @@ import { getSettingWithDefault, getLocale, getTimezone } from './deviceHelpers';
  */
 
 /**
+ * Format price in a human-readable way, avoiding scientific notation
+ * @param price - Price in €/kWh
+ * @param decimals - Number of decimal places (default: 5 for precision)
+ * @returns Formatted price string with €/kWh unit
+ */
+function formatPrice(price: number, decimals: number = 5): string {
+  // Handle zero
+  if (price === 0) {
+    return `0.${'0'.repeat(decimals)} €/kWh`;
+  }
+
+  // Handle negative prices
+  const sign = price < 0 ? '-' : '';
+  const absPrice = Math.abs(price);
+
+  // Round to desired decimal places
+  const multiplier = Math.pow(10, decimals);
+  const rounded = Math.round(absPrice * multiplier);
+  const roundedStr = rounded.toString();
+  const roundedLen = roundedStr.length;
+
+  // Format the number
+  let formatted: string;
+  if (roundedLen <= decimals) {
+    // Very small number, pad with zeros
+    formatted = `0.${'0'.repeat(decimals - roundedLen)}${roundedStr}`;
+  } else {
+    // Normal number, insert decimal point
+    const intPart = roundedStr.substring(0, roundedLen - decimals) || '0';
+    const fracPart = roundedStr.substring(roundedLen - decimals).padEnd(decimals, '0');
+    formatted = `${intPart}.${fracPart}`;
+  }
+
+  return `${sign}${formatted} €/kWh`;
+}
+
+/**
  * Load price cache from device store
  * @param device - Homey device instance
  * @returns Price cache object
@@ -128,7 +165,7 @@ export async function fetchAndUpdatePrices(
           priceChanges++;
           device.log(
             `[LOW_PRICE] Price updated for ${new Date(startTimestamp).toISOString()}: `
-            + `${existingBlock.price.toFixed(4)} → ${priceInEuros.toFixed(4)} €/kWh`,
+            + `${formatPrice(existingBlock.price, 4)} → ${formatPrice(priceInEuros, 4)}`,
           );
         }
       } else {
@@ -185,7 +222,7 @@ export function findCheapestBlocksWithLogging(
     const cheapest5 = sortedRelevant.slice(0, 5).map((b: PriceBlock) => {
       const date = new Date(b.start);
       const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
-      return `${date.toISOString()} (${b.price.toFixed(5)})${isPast}`;
+      return `${date.toISOString()} (${formatPrice(b.price)})${isPast}`;
     }).join(', ');
     device.log(`[LOW_PRICE] Top 5 cheapest relevant blocks: ${cheapest5}`);
   }
@@ -198,10 +235,10 @@ export function findCheapestBlocksWithLogging(
     const blocksStr = cheapest.map((b: PriceBlock) => {
       const date = new Date(b.start);
       const isPast = b.start <= now ? ' [PAST]' : ' [FUTURE]';
-      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, price: ${b.price.toFixed(5)})${isPast}`;
+      return `${date.toISOString()} (${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, price: ${formatPrice(b.price)})${isPast}`;
     }).join(', ');
     const totalPrice = cheapest.reduce((sum, b) => sum + b.price, 0);
-    device.log(`[LOW_PRICE] Computed cheapest blocks for count=${count}: ${cheapest.length} blocks (total: ${totalPrice.toFixed(4)} €/kWh) -> ${blocksStr}`);
+    device.log(`[LOW_PRICE] Computed cheapest blocks for count=${count}: ${cheapest.length} blocks (total: ${formatPrice(totalPrice, 4)}) -> ${blocksStr}`);
   }
 
   return cheapest;
