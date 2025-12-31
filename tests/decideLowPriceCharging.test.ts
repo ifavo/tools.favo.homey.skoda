@@ -291,5 +291,92 @@ describe('decideLowPriceCharging', () => {
       }).not.toThrow();
     });
   });
+
+  describe('integration with skip today feature', () => {
+    test('does not charge today when today is skipped due to being more expensive', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache where today is more expensive than tomorrow
+      const testCache: PriceCache = {};
+
+      // Today's blocks (expensive) - starting 1 hour from now
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+      }
+
+      // Tomorrow's blocks (cheap)
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+      }
+
+      // Find cheapest blocks (should skip today and return tomorrow's blocks)
+      const cheapest = findCheapestBlocks(testCache, 4, now);
+
+      // Should return 8 blocks from tomorrow (2x count)
+      expect(cheapest.length).toBe(8);
+
+      // All blocks should be from tomorrow (in the future)
+      cheapest.forEach(block => {
+        expect(block.start).toBeGreaterThan(now + (12 * 60 * 60 * 1000)); // At least 12 hours in future
+      });
+
+      // Now verify that decideLowPriceCharging doesn't charge today
+      // (since we're not in any of tomorrow's blocks)
+      const decision = decideLowPriceCharging(cheapest, now, {
+        enableLowPrice: true,
+        batteryLevel: 80,
+        lowBatteryThreshold: 40,
+        manualOverrideActive: false,
+        wasOnDueToPrice: false,
+      });
+
+      // Should not charge today (noChange or turnOff, but not turnOn)
+      expect(decision).not.toBe('turnOn');
+    });
+
+    test('turns off charging if was on due to price when today is skipped', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache where today is more expensive than tomorrow
+      const testCache: PriceCache = {};
+
+      // Today's blocks (expensive) - starting 1 hour from now
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+      }
+
+      // Tomorrow's blocks (cheap)
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+      }
+
+      // Find cheapest blocks (should skip today and return tomorrow's blocks)
+      const cheapest = findCheapestBlocks(testCache, 4, now);
+
+      // Verify that decideLowPriceCharging turns off if was on due to price
+      const decision = decideLowPriceCharging(cheapest, now, {
+        enableLowPrice: true,
+        batteryLevel: 80,
+        lowBatteryThreshold: 40,
+        manualOverrideActive: false,
+        wasOnDueToPrice: true, // Was on due to price
+      });
+
+      // Should turn off since we're not in cheap period anymore (today was skipped)
+      expect(decision).toBe('turnOff');
+    });
+  });
 });
 

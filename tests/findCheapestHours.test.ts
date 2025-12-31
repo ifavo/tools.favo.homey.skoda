@@ -429,5 +429,168 @@ describe('findCheapestBlocks', () => {
       expect(decision).toBe('turnOn');
     });
   });
+
+  describe('skip today when tomorrow is cheaper', () => {
+    test('skips today and uses 2x count for tomorrow when today is more expensive', () => {
+      const now = Date.now();
+      const todayUTC = new Date(now).getUTCDate();
+      const tomorrowUTC = new Date(now + 24 * 60 * 60 * 1000).getUTCDate();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache with:
+      // - Today's blocks: expensive (0.5 per block)
+      // - Tomorrow's blocks: cheap (0.1 per block)
+      const testCache: PriceCache = {};
+
+      // Today's blocks (expensive) - 8 blocks starting 1 hour from now
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+      }
+
+      // Tomorrow's blocks (cheap) - 20 blocks
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+      }
+
+      // Request 4 blocks - should skip today and return 8 blocks from tomorrow (2x count)
+      const result = findCheapestBlocks(testCache, 4, now);
+
+      // Should return 8 blocks (2x the requested count)
+      expect(result.length).toBe(8);
+
+      // All blocks should be from tomorrow
+      result.forEach(block => {
+        const blockDate = new Date(block.start).getUTCDate();
+        expect(blockDate).toBe(tomorrowUTC);
+      });
+
+      // All blocks should be cheap (0.1)
+      result.forEach(block => {
+        expect(block.price).toBe(0.1);
+      });
+    });
+
+    test('uses today when today is cheaper than tomorrow', () => {
+      const now = Date.now();
+      const todayUTC = new Date(now).getUTCDate();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache with:
+      // - Today's blocks: cheap (0.1 per block)
+      // - Tomorrow's blocks: expensive (0.5 per block)
+      const testCache: PriceCache = {};
+
+      // Today's blocks (cheap) - 8 blocks starting 1 hour from now
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+      }
+
+      // Tomorrow's blocks (expensive) - 20 blocks
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+      }
+
+      // Request 4 blocks - should use today (not skip)
+      const result = findCheapestBlocks(testCache, 4, now);
+
+      // Should return 4 blocks from today
+      expect(result.length).toBe(4);
+
+      // All blocks should be from today
+      result.forEach(block => {
+        const blockDate = new Date(block.start).getUTCDate();
+        expect(blockDate).toBe(todayUTC);
+      });
+
+      // All blocks should be cheap (0.1)
+      result.forEach(block => {
+        expect(block.price).toBe(0.1);
+      });
+    });
+
+    test('uses today when prices are equal', () => {
+      const now = Date.now();
+      const todayUTC = new Date(now).getUTCDate();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache with same price for today and tomorrow
+      const testCache: PriceCache = {};
+
+      // Today's blocks - 8 blocks starting 1 hour from now
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.2 };
+      }
+
+      // Tomorrow's blocks - 20 blocks
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.2 }; // Same price
+      }
+
+      // Request 4 blocks - should use today (not skip when equal)
+      const result = findCheapestBlocks(testCache, 4, now);
+
+      // Should return 4 blocks from today
+      expect(result.length).toBe(4);
+
+      // All blocks should be from today
+      result.forEach(block => {
+        const blockDate = new Date(block.start).getUTCDate();
+        expect(blockDate).toBe(todayUTC);
+      });
+    });
+
+    test('handles case when today has no future blocks but tomorrow is cheaper', () => {
+      const now = Date.now();
+      const tomorrowUTC = new Date(now + 24 * 60 * 60 * 1000).getUTCDate();
+      const blockDuration = 15 * 60 * 1000;
+
+      // Create cache with:
+      // - Today's blocks: all in the past (expensive)
+      // - Tomorrow's blocks: cheap
+      const testCache: PriceCache = {};
+
+      // Today's blocks (all in past) - expensive
+      for (let i = 0; i < 8; i++) {
+        const start = now - (2 * 60 * 60 * 1000) - ((8 - i) * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive, but in past
+      }
+
+      // Tomorrow's blocks (cheap) - 20 blocks
+      const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      for (let i = 0; i < 20; i++) {
+        const start = tomorrowStart + (i * blockDuration);
+        const end = start + blockDuration;
+        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+      }
+
+      // Request 4 blocks - should use tomorrow (today has no future blocks)
+      const result = findCheapestBlocks(testCache, 4, now);
+
+      // Should return 4 blocks from tomorrow (normal count, not 2x, since today has no future blocks)
+      expect(result.length).toBe(4);
+
+      // All blocks should be from tomorrow
+      result.forEach(block => {
+        const blockDate = new Date(block.start).getUTCDate();
+        expect(blockDate).toBe(tomorrowUTC);
+      });
+    });
+  });
 });
 

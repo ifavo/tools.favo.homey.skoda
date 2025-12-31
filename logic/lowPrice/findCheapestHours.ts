@@ -27,7 +27,9 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
  * - This function always recalculates the cheapest blocks using the current `count`
  * - `now` is passed in for testability; defaults to current time.
  * - Finds the cheapest individual blocks (not necessarily consecutive)
- * - Looks at today first, falls back to tomorrow if no future blocks from today
+ * - Uses today's cheapest blocks if they are in the future, otherwise uses tomorrow's cheapest
+ * - If today's cheapest blocks are more expensive than tomorrow's cheapest blocks,
+ *   skips today and uses 2x the count for tomorrow
  * @param cache - Cached price data as PriceCache object
  * @param count - Number of cheapest blocks to find
  * @param now - Current timestamp in milliseconds (defaults to Date.now())
@@ -54,15 +56,38 @@ export function findCheapestBlocks(
   const todayBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, todayUTC));
   const cheapestToday = getCheapestBlocks(todayBlocks, count);
 
-  // Filter to include current and future blocks from today's cheapest
+  // Filter to only future blocks from today's cheapest
   // Use b.end > now to include blocks we're currently in (synchronizes with decideLowPriceCharging logic)
-  let cheapest = cheapestToday.filter((b) => b.end > now);
+  const cheapestTodayFuture = cheapestToday.filter((b) => b.end > now);
 
-  // Step 2: If no current/future blocks from today, find cheapest blocks for TOMORROW
-  if (cheapest.length === 0) {
-    // Include blocks that haven't ended yet (current or future)
-    const tomorrowBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, tomorrowUTC) && b.end > now);
+  // Step 2: Get tomorrow's blocks for comparison
+  const tomorrowBlocks = relevantBlocks.filter(
+    (b: PriceBlock) => isBlockOnDate(b, tomorrowUTC) && b.end > now,
+  );
+  const cheapestTomorrow = getCheapestBlocks(tomorrowBlocks, count);
+
+  // Step 3: Compare prices - if today's cheapest is more expensive than tomorrow's cheapest,
+  // skip today and use 2x count for tomorrow
+  let cheapest: Array<PriceBlock>;
+  if (cheapestTodayFuture.length === 0) {
+    // All of today's cheapest are in the past, use tomorrow's cheapest
     cheapest = getCheapestBlocks(tomorrowBlocks, count);
+  } else if (cheapestTomorrow.length > 0) {
+    // Calculate average price for comparison
+    const todayAvgPrice = cheapestTodayFuture.reduce((sum, b) => sum + b.price, 0) / cheapestTodayFuture.length;
+    const tomorrowAvgPrice = cheapestTomorrow.reduce((sum, b) => sum + b.price, 0) / cheapestTomorrow.length;
+
+    // If today's cheapest is more expensive than tomorrow's cheapest, skip today and use 2x count for tomorrow
+    if (todayAvgPrice > tomorrowAvgPrice) {
+      // Skip today, use 2x count for tomorrow
+      cheapest = getCheapestBlocks(tomorrowBlocks, count * 2);
+    } else {
+      // Use today's cheapest that are in the future (may be fewer than count if some are in the past)
+      cheapest = cheapestTodayFuture;
+    }
+  } else {
+    // No tomorrow blocks available, use today's cheapest that are in the future
+    cheapest = cheapestTodayFuture;
   }
 
   // Sort result by time for consistent ordering
