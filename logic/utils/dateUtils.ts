@@ -30,6 +30,35 @@ export function getUTCDate(timestamp: number): number {
 }
 
 /**
+ * Get the UTC day start timestamp (00:00:00.000Z) for a timestamp.
+ * This is a stable day identifier across months/years (unlike getUTCDate which is only 1-31).
+ * @param timestamp - Unix timestamp in milliseconds
+ * @returns Unix timestamp (ms) at UTC midnight of the same day
+ */
+export function getUTCDayStartMs(timestamp: number): number {
+  const d = new Date(timestamp);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0);
+}
+
+/**
+ * Get UTC day start timestamp for today.
+ * @param now - Current timestamp (defaults to Date.now())
+ * @returns UTC midnight timestamp for today
+ */
+export function getTodayUTCDayStartMs(now: number = Date.now()): number {
+  return getUTCDayStartMs(now);
+}
+
+/**
+ * Get UTC day start timestamp for tomorrow.
+ * @param now - Current timestamp (defaults to Date.now())
+ * @returns UTC midnight timestamp for tomorrow
+ */
+export function getTomorrowUTCDayStartMs(now: number = Date.now()): number {
+  return getUTCDayStartMs(now + MILLISECONDS_PER_DAY);
+}
+
+/**
  * Get UTC date number for today
  * @param now - Current timestamp (defaults to Date.now())
  * @returns UTC date number for today

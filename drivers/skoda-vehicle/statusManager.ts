@@ -18,7 +18,12 @@ import {
 } from '../../logic/vehicleStatus/capabilityMapping';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
 import { resolveVin, getAccessToken, updateCapabilitySafely } from './deviceHelpers';
-import { isManualOverrideActive, isAutomaticControlActive, checkChargingControl } from './chargingControl';
+import {
+  isManualOverrideActive,
+  isAutomaticControlActive,
+  checkChargingControl,
+  setOnOffWithoutManualOverride,
+} from './chargingControl';
 import type { ChargingControlState } from './chargingControl';
 import { updateDeviceImage } from './vehicleInfo';
 
@@ -117,7 +122,7 @@ export async function updateCapabilities(
       const isAutomaticControlActiveValue = isAutomaticControlActive(device, state);
 
       if (!isManualOverrideActive(device) && !isAutomaticControlActiveValue) {
-        await device.setCapabilityValue('onoff', isCharging);
+        await setOnOffWithoutManualOverride(device, isCharging);
         device.log(`[ONOFF] Updated from API: ${isCharging ? 'ON' : 'OFF'} (charging state: ${charging.status.state})`);
       } else {
         const currentOnOff = device.getCapabilityValue('onoff');

@@ -5,7 +5,12 @@ import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { formatNextChargingTimes } from '../../logic/lowPrice/formatNextChargingTimes';
 import { findCheapestBlocks } from '../../logic/lowPrice/findCheapestHours';
-import { getUTCDate, getTodayUTCDate, getTomorrowUTCDate, MILLISECONDS_PER_MINUTE } from '../../logic/utils/dateUtils';
+import {
+  getTodayUTCDayStartMs,
+  getTomorrowUTCDayStartMs,
+  getUTCDayStartMs,
+  MILLISECONDS_PER_MINUTE,
+} from '../../logic/utils/dateUtils';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
 import { getSettingWithDefault, getLocale, getTimezone } from './deviceHelpers';
 
@@ -205,10 +210,10 @@ export function findCheapestBlocksWithLogging(
   const now = Date.now();
   const allBlocks = Object.values(cache);
   const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-    const todayUTC = getTodayUTCDate(now);
-    const tomorrowUTC = getTomorrowUTCDate(now);
-    const d = getUTCDate(b.start);
-    return d === todayUTC || d === tomorrowUTC;
+    const todayUtcDayStart = getTodayUTCDayStartMs(now);
+    const tomorrowUtcDayStart = getTomorrowUTCDayStartMs(now);
+    const d = getUTCDayStartMs(b.start);
+    return d === todayUtcDayStart || d === tomorrowUtcDayStart;
   }) as Array<PriceBlock>;
 
   // Log cache statistics for debugging

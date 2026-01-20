@@ -1,5 +1,5 @@
 import type { PriceBlock, PriceCache } from './types';
-import { getUTCDate, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
+import { getUTCDayStartMs, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
 
 /**
  * Check if a block is on a specific UTC date
@@ -7,8 +7,8 @@ import { getUTCDate, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
  * @param dateUTC - UTC date number (1-31) to check against
  * @returns True if block is on the specified UTC date, false otherwise
  */
-function isBlockOnDate(block: PriceBlock, dateUTC: number): boolean {
-  return getUTCDate(block.start) === dateUTC;
+function isBlockOnDay(block: PriceBlock, dayStartUtcMs: number): boolean {
+  return getUTCDayStartMs(block.start) === dayStartUtcMs;
 }
 
 /**
@@ -40,12 +40,12 @@ export function findCheapestBlocks(
   count: number,
   now: number = Date.now(),
 ): Array<PriceBlock> {
-  const todayUTC = getUTCDate(now);
-  const tomorrowUTC = getUTCDate(now + MILLISECONDS_PER_DAY);
+  const todayUtcDayStart = getUTCDayStartMs(now);
+  const tomorrowUtcDayStart = getUTCDayStartMs(now + MILLISECONDS_PER_DAY);
 
   // Filter relevant blocks (today and tomorrow)
   const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-    return isBlockOnDate(b, todayUTC) || isBlockOnDate(b, tomorrowUTC);
+    return isBlockOnDay(b, todayUtcDayStart) || isBlockOnDay(b, tomorrowUtcDayStart);
   }) as Array<PriceBlock>;
 
   if (relevantBlocks.length === 0 || count <= 0) {
@@ -53,7 +53,7 @@ export function findCheapestBlocks(
   }
 
   // Step 1: Find cheapest blocks for TODAY (including past ones)
-  const todayBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDate(b, todayUTC));
+  const todayBlocks = relevantBlocks.filter((b: PriceBlock) => isBlockOnDay(b, todayUtcDayStart));
   const cheapestToday = getCheapestBlocks(todayBlocks, count);
 
   // Filter to only future blocks from today's cheapest
@@ -62,7 +62,7 @@ export function findCheapestBlocks(
 
   // Step 2: Get tomorrow's blocks for comparison
   const tomorrowBlocks = relevantBlocks.filter(
-    (b: PriceBlock) => isBlockOnDate(b, tomorrowUTC) && b.end > now,
+    (b: PriceBlock) => isBlockOnDay(b, tomorrowUtcDayStart) && b.end > now,
   );
   const cheapestTomorrow = getCheapestBlocks(tomorrowBlocks, count);
 

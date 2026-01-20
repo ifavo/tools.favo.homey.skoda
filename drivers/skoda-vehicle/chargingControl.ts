@@ -25,6 +25,28 @@ export interface ChargingControlState {
 }
 
 /**
+ * Homey device with an internal flag to prevent manual override stamping
+ * when automation updates the on/off capability.
+ */
+export type ManualOverrideAwareDevice = Homey.Device & { _suppressManualOverride?: boolean };
+
+/**
+ * Update the onoff capability without triggering manual override bookkeeping.
+ * A temporary flag on the device is used so the capability listener can skip stamping.
+ */
+export async function setOnOffWithoutManualOverride(
+  device: ManualOverrideAwareDevice,
+  value: boolean,
+): Promise<void> {
+  device._suppressManualOverride = true;
+  try {
+    await device.setCapabilityValue('onoff', value);
+  } finally {
+    device._suppressManualOverride = false;
+  }
+}
+
+/**
  * Check if manual control override is still active (within 15 minutes)
  * Only logs expiration once to avoid spam
  * @param device - Homey device instance
@@ -100,7 +122,7 @@ export async function turnOnChargingSelf(
   dueToLowBattery: boolean,
 ): Promise<void> {
   try {
-    await device.setCapabilityValue('onoff', true);
+    await setOnOffWithoutManualOverride(device as ManualOverrideAwareDevice, true);
 
     if (dueToLowBattery) {
       state.setLowBatteryEnabled(true);
@@ -131,7 +153,7 @@ export async function turnOffChargingSelf(
   state: ChargingControlState,
 ): Promise<void> {
   try {
-    await device.setCapabilityValue('onoff', false);
+    await setOnOffWithoutManualOverride(device as ManualOverrideAwareDevice, false);
 
     // Clear both flags
     state.setLowBatteryEnabled(false);

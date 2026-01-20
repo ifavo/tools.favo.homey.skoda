@@ -19,6 +19,7 @@ import {
 import {
   type ChargingControlState,
   isManualOverrideActive,
+  type ManualOverrideAwareDevice,
   turnOnChargingSelf,
   turnOffChargingSelf,
   restoreLowBatteryState,
@@ -477,6 +478,12 @@ class SkodaVehicleDevice extends Homey.Device {
   async onCapabilityOnOff(value: boolean): Promise<void> {
     try {
       this.log(`[ONOFF] Manual control: ${value}`);
+
+      // Skip manual override stamping when automation explicitly suppresses it
+      if ((this as ManualOverrideAwareDevice)._suppressManualOverride) {
+        this.log('[ONOFF] Skipping manual override stamp (automation update)');
+        return;
+      }
 
       // Store timestamp of manual control
       const now = Date.now();
