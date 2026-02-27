@@ -6,6 +6,7 @@ import { TibberPriceSource } from '../../logic/lowPrice/sources/tibber';
 import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { decideLowPriceCharging } from '../../logic/lowPrice/decideLowPriceCharging';
+import { isLowPriceNow as isLowPriceNowForBlocks } from '../../logic/lowPrice/isLowPriceNow';
 import { MANUAL_OVERRIDE_DURATION as OVERRIDE_DURATION } from '../../logic/manualOverride/timing';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
 import { MILLISECONDS_PER_MINUTE, MILLISECONDS_PER_HOUR, MILLISECONDS_PER_DAY, getMillisecondsUntilNext15MinuteBoundary } from '../../logic/utils/dateUtils';
@@ -410,6 +411,15 @@ class SkodaVehicleDevice extends Homey.Device {
       // Find cheapest blocks (recomputed each time from cached price data)
       const cheapest = findCheapestBlocksWithLogging(this, updatedCache, blocksCount);
 
+      // Compute and expose whether current time is within a low price block
+      const now = Date.now();
+      const isLowPriceNow = isLowPriceNowForBlocks(cheapest, now);
+      try {
+        await this.setCapabilityValue('is_low_price_now', isLowPriceNow);
+      } catch (capError: unknown) {
+        this.error('[LOW_PRICE] Failed to update is_low_price_now capability:', extractErrorMessage(capError));
+      }
+
       // Always update status display (even if feature is disabled)
       await updatePriceStatus(this, cheapest, timezone);
 
@@ -421,7 +431,6 @@ class SkodaVehicleDevice extends Homey.Device {
       }
 
       // Use isolated decision logic
-      const now = Date.now();
       const batteryLevel = this.getCapabilityValue('measure_battery') as number | null;
       const threshold = this.getSetting('low_battery_threshold') as number | null;
       const wasOnDueToPrice = this.getSetting('_low_price_enabled') as boolean;

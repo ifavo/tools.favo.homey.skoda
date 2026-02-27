@@ -1,0 +1,14 @@
+{
+  "conditions": [
+    {
+      "id": "is_low_price_now",
+      "title": {
+        "en": "Low Price Active Now"
+      },
+      "hint": {
+        "en": "Checks if this Skoda vehicle is currently in a low price charging period."
+      }
+    }
+  ]
+}
+

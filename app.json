@@ -39,6 +39,26 @@
       }
     }
   ],
+  "flow": {
+    "conditions": [
+      {
+        "id": "is_low_price_now",
+        "title": {
+          "en": "Low Price Active Now"
+        },
+        "hint": {
+          "en": "Checks if this Skoda vehicle is currently in a low price charging period."
+        },
+        "args": [
+          {
+            "type": "device",
+            "name": "device",
+            "filter": "driver_id=skoda-vehicle"
+          }
+        ]
+      }
+    ]
+  },
   "drivers": [
     {
       "id": "skoda-vehicle",
@@ -57,7 +77,8 @@
         "alarm_contact.bonnet",
         "alarm_contact.window",
         "alarm_contact.light",
-        "next_charging_times"
+        "next_charging_times",
+        "is_low_price_now"
       ],
       "capabilitiesOptions": {
         "locked": {
@@ -123,6 +144,11 @@
           "title": {
             "en": "Next Charging Times",
             "de": "Nächste Ladezeiten"
+          }
+        },
+        "is_low_price_now": {
+          "title": {
+            "en": "Low Price Active Now"
           }
         }
       },
@@ -193,6 +219,15 @@
     }
   ],
   "capabilities": {
+    "is_low_price_now": {
+      "type": "boolean",
+      "title": {
+        "en": "Low Price Active Now"
+      },
+      "getable": true,
+      "setable": false,
+      "uiComponent": "sensor"
+    },
     "next_charging_times": {
       "type": "string",
       "title": {

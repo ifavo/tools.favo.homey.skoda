@@ -23,6 +23,18 @@ class SkodaVehicleDriver extends Homey.Driver {
    */
   async onInit(): Promise<void> {
     this.log('SkodaVehicleDriver has been initialized');
+
+    const isLowPriceNowCondition = this.homey.flow.getConditionCard('is_low_price_now');
+    isLowPriceNowCondition.registerRunListener(async (args) => {
+      try {
+        const device = args.device as Homey.Device;
+        const value = device.getCapabilityValue('is_low_price_now') as boolean | null;
+        return Boolean(value);
+      } catch (error: unknown) {
+        this.error('[FLOW] is_low_price_now condition failed:', extractErrorMessage(error));
+        return false;
+      }
+    });
   }
 
   /**

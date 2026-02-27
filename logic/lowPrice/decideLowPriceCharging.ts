@@ -1,4 +1,5 @@
 import type { PriceBlock } from './types';
+import { isLowPriceNow } from './isLowPriceNow';
 
 export type ChargingDecision = 'turnOn' | 'turnOff' | 'noChange';
 
@@ -36,7 +37,7 @@ export function decideLowPriceCharging(
   }
 
   // Check if current time is in cheap period
-  const isCheapNow = cheapest.some((b: PriceBlock) => now >= b.start && now < b.end);
+  const isCheapNow = isLowPriceNow(cheapest, now);
 
   // Low battery takes priority - check if battery is below threshold
   const isLowBattery = lowBatteryThreshold != null
