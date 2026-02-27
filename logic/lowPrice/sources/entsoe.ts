@@ -12,10 +12,17 @@ import {
  * Supports PT60M (hourly) and PT15M resolutions; hourly data is expanded to 15-minute blocks.
  */
 
-const ENTSOE_BASE_URL = 'https://web-api.tp.entsoe.eu/api';
+/** ENTSO-E API base URLs (try web-api first, then external-api per hass-entso-e) */
+const ENTSOE_BASE_URLS = [
+  'https://web-api.tp.entsoe.eu/api',
+  'https://external-api.tp.entsoe.eu/api',
+];
 
-/** DE-LU bidding zone EIC code (default, matches SMARD DE-LU) */
+/** Germany EIC code (10Y1001A1001A83F). */
 export const DEFAULT_BIDDING_ZONE = '10Y1001A1001A83F';
+
+/** DE-LU bidding zone EIC code; used as fallback when Germany returns no data. */
+const DE_LU_BIDDING_ZONE = '10Y1001A1001A82H';
 
 const PT60M_MS = 60 * MILLISECONDS_PER_MINUTE;
 const PT15M_MS = 15 * MILLISECONDS_PER_MINUTE;
@@ -77,31 +84,59 @@ export class EntsoePriceSource implements PriceDataSource {
     const periodStart = formatPeriodUTC(yesterdayStart);
     const periodEnd = formatPeriodUTC(dayAfterTomorrowStart);
 
-    const query = [
-      `securityToken=${encodeURIComponent(this.apiKey)}`,
-      'documentType=A44',
-      `in_Domain=${encodeURIComponent(this.biddingZone)}`,
-      `out_Domain=${encodeURIComponent(this.biddingZone)}`,
-      `periodStart=${periodStart}`,
-      `periodEnd=${periodEnd}`,
-    ].join('&');
-    const url = `${ENTSOE_BASE_URL}?${query}`;
-    const response = await fetch(url);
+    const zonesToTry =
+      this.biddingZone === DE_LU_BIDDING_ZONE
+        ? [this.biddingZone]
+        : [this.biddingZone, DE_LU_BIDDING_ZONE];
 
-    if (!response.ok) {
-      throw new Error(`ENTSO-E API failed: ${response.status} ${response.statusText}`);
+    let lastError: Error | null = null;
+    for (const baseUrl of ENTSOE_BASE_URLS) {
+      for (const zone of zonesToTry) {
+        const query = [
+          `securityToken=${encodeURIComponent(this.apiKey)}`,
+          'documentType=A44',
+          `in_Domain=${encodeURIComponent(zone)}`,
+          `out_Domain=${encodeURIComponent(zone)}`,
+          `periodStart=${periodStart}`,
+          `periodEnd=${periodEnd}`,
+        ].join('&');
+        const url = `${baseUrl}?${query}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          lastError = new Error(`ENTSO-E API failed: ${response.status} ${response.statusText}`);
+          continue;
+        }
+
+        const xmlText = await response.text();
+        const entries = this.parseResponse(xmlText);
+        if (entries.length > 0) {
+          return entries;
+        }
+        lastError = new Error('ENTSO-E API: No price points in response');
+      }
     }
 
-    const xmlText = await response.text();
+    throw lastError ?? new Error('ENTSO-E API: All endpoints failed');
+  }
+
+  /**
+   * Parse ENTSO-E XML response into price entries.
+   * Separated so we can reuse after fetch and handle Acknowledgement_MarketDocument (no data).
+   */
+  private parseResponse(xmlText: string): Array<PriceDataEntry> {
     const parser = new XMLParser({
       ignoreDeclaration: true,
       ignoreAttributes: false,
       attributeNamePrefix: '@_',
     });
     const doc = parser.parse(xmlText) as Record<string, unknown>;
+    if (doc['Acknowledgement_MarketDocument'] ?? doc['ns1:Acknowledgement_MarketDocument']) {
+      return [];
+    }
     const root = doc['Publication_MarketDocument'] ?? doc['ns1:Publication_MarketDocument'] ?? doc;
     if (!root || typeof root !== 'object') {
-      throw new Error('ENTSO-E API: Invalid response (no Publication_MarketDocument)');
+      return [];
     }
 
     const timeSeriesArr = asArray(
@@ -167,10 +202,6 @@ export class EntsoePriceSource implements PriceDataSource {
           }
         }
       }
-    }
-
-    if (entries.length === 0) {
-      throw new Error('ENTSO-E API: No price points in response');
     }
 
     entries.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());

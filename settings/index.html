@@ -87,7 +87,19 @@
         class="homey-form-input" 
         placeholder="Enter your Tibber API token (optional)"
       />
-      <p class="homey-form-help">Enter your Tibber API token for electricity price data. If left empty, SMARD API will be used as the data source instead. Get your Tibber token from <a href="https://developer.tibber.com/" target="_blank">Tibber Developer Portal</a>.</p>
+      <p class="homey-form-help">Enter your Tibber API token for electricity price data. If set, Tibber is used first. If left empty, ENTSO-E or SMARD is used. Get your Tibber token from <a href="https://developer.tibber.com/" target="_blank">Tibber Developer Portal</a>.</p>
+    </div>
+
+    <div class="homey-form-group">
+      <label class="homey-form-label" for="entsoe_api_key">ENTSO-E Transparency API Key</label>
+      <input 
+        type="text" 
+        id="entsoe_api_key" 
+        name="entsoe_api_key" 
+        class="homey-form-input" 
+        placeholder="Enter your ENTSO-E security token (optional)"
+      />
+      <p class="homey-form-help">Security token from the ENTSO-E Transparency Platform. Used as electricity price source when no Tibber token is set. If both are empty, SMARD (DE-LU) is used. Register at <a href="https://transparency.entsoe.eu/" target="_blank">ENTSO-E Transparency Platform</a>.</p>
     </div>
     
     <button class="homey-button-primary homey-button-full" type="submit">Save</button>
@@ -97,6 +109,7 @@
     function onHomeyReady(Homey) {
       const refreshTokenInput = document.getElementById('refresh_token');
       const tibberTokenInput = document.getElementById('tibber_token');
+      const entsoeApiKeyInput = document.getElementById('entsoe_api_key');
       const testButton = document.getElementById('test-token');
       const testStatus = document.getElementById('test-status');
       const accessTokenDisplay = document.getElementById('access_token_display');
@@ -117,6 +130,13 @@
       Homey.get('tibber_token', function(err, value) {
         if (!err && value) {
           tibberTokenInput.value = value;
+        }
+      });
+
+      // Load ENTSO-E API key setting
+      Homey.get('entsoe_api_key', function(err, value) {
+        if (!err && value) {
+          entsoeApiKeyInput.value = value;
         }
       });
 
@@ -251,32 +271,41 @@
         event.preventDefault();
         const refreshToken = refreshTokenInput.value.trim();
         const tibberToken = tibberTokenInput.value.trim();
+        const entsoeApiKey = entsoeApiKeyInput.value.trim();
         
         if (!refreshToken) {
           Homey.alert('Please enter a refresh token.', 'error');
           return;
         }
 
-        // Save both tokens
+        // Save refresh token
         Homey.set('refresh_token', refreshToken, function(err) {
           if (err) {
             Homey.alert('Failed to save refresh token: ' + err.message, 'error');
             return;
           }
           
-          // Save Tibber token (can be empty, will use SMARD if not set)
+          // Save Tibber token (can be empty)
           Homey.set('tibber_token', tibberToken, function(tibberErr) {
             if (tibberErr) {
               Homey.alert('Failed to save Tibber token: ' + tibberErr.message, 'error');
               return;
             }
-            
-            Homey.alert('Settings saved successfully.', 'success');
-            // Auto-test after saving (by setting the test flag)
-            Homey.set('_test_token_flag', true, function(flagErr) {
-              if (flagErr) {
-                console.error('Failed to trigger token test:', flagErr);
+
+            // Save ENTSO-E API key (can be empty)
+            Homey.set('entsoe_api_key', entsoeApiKey, function(entsoeErr) {
+              if (entsoeErr) {
+                Homey.alert('Failed to save ENTSO-E API key: ' + entsoeErr.message, 'error');
+                return;
               }
+              
+              Homey.alert('Settings saved successfully.', 'success');
+              // Auto-test after saving (by setting the test flag)
+              Homey.set('_test_token_flag', true, function(flagErr) {
+                if (flagErr) {
+                  console.error('Failed to trigger token test:', flagErr);
+                }
+              });
             });
           });
         });
