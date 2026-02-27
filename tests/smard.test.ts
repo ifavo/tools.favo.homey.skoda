@@ -3,23 +3,35 @@ import path from 'path';
 
 import { SmardPriceSource } from '../logic/lowPrice/sources/smard';
 
+/** Build a timestamp for today at 00:00 local, then add 15-min slots so latest entry is "today" */
+function seriesWithLatestToday(count: number = 10): Array<[number, number]> {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const series: Array<[number, number]> = [];
+  const quarterHourMs = 15 * 60 * 1000;
+  for (let i = 0; i < count; i++) {
+    series.push([todayStart.getTime() + i * quarterHourMs, 77.3 + i]);
+  }
+  return series;
+}
+
 describe('SMARD data source', () => {
   test('SmardPriceSource parses SMARD API response correctly', async () => {
-    // Mock fetch to return test data
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const timestamp = todayStart.getTime();
+    const series = seriesWithLatestToday(20);
+
     global.fetch = jest.fn((url: string) => {
       if (url.includes('index_quarterhour.json')) {
-        const indexPath = path.join(__dirname, 'assets', 'smard-index.json');
-        const indexData = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(indexData),
+          json: () => Promise.resolve({ timestamps: [timestamp] }),
         } as Response);
       } else if (url.includes('_quarterhour_')) {
-        const dataPath = path.join(__dirname, 'assets', 'smard-data.json');
-        const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve(data),
+          json: () => Promise.resolve({ series }),
         } as Response);
       }
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
@@ -28,43 +40,31 @@ describe('SMARD data source', () => {
     const source = new SmardPriceSource('DE-LU');
     const entries = await source.fetch();
 
-    // Verify entries are parsed correctly
     expect(entries.length).toBeGreaterThan(0);
     expect(entries[0]).toHaveProperty('date');
     expect(entries[0]).toHaveProperty('price');
     expect(typeof entries[0].price).toBe('number');
     expect(entries[0].price).toBeGreaterThan(0);
-
-    // Verify timestamps are ISO strings
     expect(entries[0].date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-
-    // Verify prices are in €/kWh (converted from €/MWh)
-    // First entry in test data is 77.3 €/MWh = 0.0773 €/kWh
+    // 77.3 €/MWh = 0.0773 €/kWh
     expect(entries[0].price).toBeCloseTo(0.0773, 4);
   });
 
   test('SmardPriceSource handles null prices correctly', async () => {
-    // Mock fetch with data containing null prices
+    const series = seriesWithLatestToday(5);
+    series[1] = [series[1][0], null as unknown as number]; // one null price to skip
+    const timestamp = series[0][0];
+
     global.fetch = jest.fn((url: string) => {
       if (url.includes('index_quarterhour.json')) {
-        // Return only one timestamp so we only fetch once
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            timestamps: [1766790000000],
-          }),
+          json: () => Promise.resolve({ timestamps: [timestamp] }),
         } as Response);
       } else if (url.includes('_quarterhour_')) {
-        // Return data with null prices
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            series: [
-              [1766787300000, 77.3],
-              [1766788200000, null], // null price should be skipped
-              [1766789100000, 85.54],
-            ],
-          }),
+          json: () => Promise.resolve({ series }),
         } as Response);
       }
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
@@ -73,8 +73,7 @@ describe('SMARD data source', () => {
     const source = new SmardPriceSource('DE-LU');
     const entries = await source.fetch();
 
-    // Should only have 2 entries (null price skipped)
-    expect(entries.length).toBe(2);
+    expect(entries.length).toBe(4); // 5 minus the null
     expect(entries.every((e) => e.price !== null)).toBe(true);
   });
 
@@ -84,7 +83,7 @@ describe('SMARD data source', () => {
     }).toThrow('Invalid market area');
   });
 
-  test('SmardPriceSource handles missing series data gracefully', async () => {
+  test('SmardPriceSource throws when missing series data (so fallback can run)', async () => {
     // Mock fetch with data missing series field
     global.fetch = jest.fn((url: string) => {
       if (url.includes('index_quarterhour.json')) {
@@ -107,14 +106,10 @@ describe('SMARD data source', () => {
     }) as jest.Mock;
 
     const source = new SmardPriceSource('DE-LU');
-    const entries = await source.fetch();
-
-    // Should return empty array when no series data
-    expect(entries).toEqual([]);
+    await expect(source.fetch()).rejects.toThrow('SMARD API: No price data available');
   });
 
-  test('SmardPriceSource handles empty entries array', async () => {
-    // Mock fetch that returns empty entries
+  test('SmardPriceSource throws when series is empty (so fallback can run)', async () => {
     global.fetch = jest.fn((url: string) => {
       if (url.includes('index_quarterhour.json')) {
         return Promise.resolve({
@@ -124,22 +119,16 @@ describe('SMARD data source', () => {
           }),
         } as Response);
       } else if (url.includes('_quarterhour_')) {
-        // Return data with empty series
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            series: [],
-          }),
+          json: () => Promise.resolve({ series: [] }),
         } as Response);
       }
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
     }) as jest.Mock;
 
     const source = new SmardPriceSource('DE-LU');
-    const entries = await source.fetch();
-
-    // Should return empty array
-    expect(entries).toEqual([]);
+    await expect(source.fetch()).rejects.toThrow('SMARD API: No price data available');
   });
 
   test('SmardPriceSource filters entries when latest data is today', async () => {
@@ -230,31 +219,26 @@ describe('SMARD data source', () => {
   });
 
   test('SmardPriceSource handles failed data fetch for timestamp gracefully', async () => {
+    const series = seriesWithLatestToday(5);
+    const ts1 = series[0][0];
+    const ts2 = ts1 + 7 * 24 * 60 * 60 * 1000; // second timestamp a week later (second file)
+
     global.fetch = jest.fn((url: string) => {
       if (url.includes('index_quarterhour.json')) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            timestamps: [1766790000000, 1766793600000],
-          }),
+          json: () => Promise.resolve({ timestamps: [ts1, ts2] }),
         } as Response);
-      } else if (url.includes('_quarterhour_1766790000000')) {
-        // First timestamp fails
+      } else if (url.includes(`_quarterhour_${ts1}`)) {
         return Promise.resolve({
           ok: false,
           status: 404,
           statusText: 'Not Found',
         } as Response);
-      } else if (url.includes('_quarterhour_1766793600000')) {
-        // Second timestamp succeeds
+      } else if (url.includes(`_quarterhour_${ts2}`)) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            series: [
-              [1766793600000, 77.3],
-              [1766794500000, 85.54],
-            ],
-          }),
+          json: () => Promise.resolve({ series }),
         } as Response);
       }
       return Promise.reject(new Error(`Unexpected URL: ${url}`));
@@ -263,9 +247,7 @@ describe('SMARD data source', () => {
     const source = new SmardPriceSource('DE-LU');
     const entries = await source.fetch();
 
-    // Should still return entries from the successful fetch
-    expect(entries.length).toBe(2);
-    // Should have logged a warning for the failed fetch (covered lines 69-70)
+    expect(entries.length).toBe(5);
   });
 });
 

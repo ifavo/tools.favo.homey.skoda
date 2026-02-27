@@ -3,6 +3,7 @@ import type { PriceBlock, PriceCache } from '../../logic/lowPrice/types';
 import { TibberPriceSource } from '../../logic/lowPrice/sources/tibber';
 import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
 import { EntsoePriceSource } from '../../logic/lowPrice/sources/entsoe';
+import { SmartEnergyPriceSource } from '../../logic/lowPrice/sources/smartEnergy';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { formatNextChargingTimes } from '../../logic/lowPrice/formatNextChargingTimes';
 import { findCheapestBlocks } from '../../logic/lowPrice/findCheapestHours';
@@ -122,6 +123,13 @@ export async function fetchAndUpdatePrices(
         const fallbackSource = new SmardPriceSource('DE-LU');
         priceData = await fallbackSource.fetch();
         Object.setPrototypeOf(priceSource, fallbackSource);
+      } else if (priceSource instanceof SmardPriceSource) {
+        const errorMessage = extractErrorMessage(error);
+        device.log(
+          `[LOW_PRICE] SMARD API failed (${errorMessage}), falling back to Smart Energy API`,
+        );
+        const fallbackSource = new SmartEnergyPriceSource();
+        priceData = await fallbackSource.fetch();
       } else {
         throw error;
       }

@@ -110,7 +110,7 @@ export class SmardPriceSource implements PriceDataSource {
     // If latest data is today, return 48 entries (yesterday and today)
     // If latest data is tomorrow, return 72 entries (yesterday, today, and tomorrow)
     if (entries.length === 0) {
-      return [];
+      throw new Error('SMARD API: No price data available (empty series or failed data fetches)');
     }
 
     // Sort by date to ensure chronological order
@@ -118,10 +118,16 @@ export class SmardPriceSource implements PriceDataSource {
 
     const latestEntry = entries[entries.length - 1];
     const latestEntryDate = new Date(latestEntry.date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const latestEntryDay = new Date(latestEntryDate);
-    latestEntryDay.setHours(0, 0, 0, 0);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const latestEntryDay = new Date(latestEntryDate.getFullYear(), latestEntryDate.getMonth(), latestEntryDate.getDate(), 0, 0, 0, 0);
+
+    // Reject stale data: we need today or tomorrow for low-price decisions
+    if (latestEntryDay.getTime() < today.getTime()) {
+      throw new Error(
+        'SMARD API: Latest data is not from today or tomorrow (stale); fall back to another source',
+      );
+    }
 
     // Calculate number of entries per day (24 hours * 60 minutes / duration in minutes)
     const entriesPerDay = (24 * 60) / 15; // 96 entries per day for 15-minute intervals
