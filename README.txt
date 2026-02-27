@@ -16,7 +16,8 @@ FEATURES
 
 • Automatic Charging Control
   - Low battery threshold: Automatically start charging when battery drops below configured percentage
-  - Low price charging: Charge during cheapest electricity hours (aWATTar API integration)
+  - Low price charging: Charge during cheapest electricity hours
+  - Price sources (in order): Tibber (if token set), ENTSO-E Transparency (if API key set), else SMARD (DE-LU). ENTSO-E uses a fixed DE-LU bidding zone; hourly prices are expanded to 15-minute blocks.
   - Priority system: Low battery charging takes precedence over price-based charging
 
 • Real-time Updates

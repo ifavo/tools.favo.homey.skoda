@@ -4,6 +4,7 @@ import Homey from 'homey';
 import type { PriceBlock } from '../../logic/lowPrice/types';
 import { TibberPriceSource } from '../../logic/lowPrice/sources/tibber';
 import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
+import { EntsoePriceSource, DEFAULT_BIDDING_ZONE as ENTSOE_DE_LU } from '../../logic/lowPrice/sources/entsoe';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { decideLowPriceCharging } from '../../logic/lowPrice/decideLowPriceCharging';
 import { isLowPriceNow as isLowPriceNowForBlocks } from '../../logic/lowPrice/isLowPriceNow';
@@ -81,17 +82,21 @@ class SkodaVehicleDevice extends Homey.Device {
         // Continue initialization even if VIN setup fails
       }
 
-      // Initialize price data source
-      // Use Tibber if token is configured, otherwise use SMARD
+      // Initialize price data source: Tibber preferred, then ENTSO-E if configured, else SMARD
       const tibberTokenSetting = this.homey.settings.get('tibber_token') as string | undefined;
       const tibberToken = tibberTokenSetting && tibberTokenSetting.trim() !== '' ? tibberTokenSetting : undefined;
+      const entsoeApiKeySetting = this.homey.settings.get('entsoe_api_key') as string | undefined;
+      const entsoeApiKey = entsoeApiKeySetting && entsoeApiKeySetting.trim() !== '' ? entsoeApiKeySetting : undefined;
 
       if (tibberToken) {
         this.priceSource = new TibberPriceSource(tibberToken, 'de');
         this.log('[LOW_PRICE] Using Tibber API as price data source');
+      } else if (entsoeApiKey) {
+        this.priceSource = new EntsoePriceSource(entsoeApiKey, ENTSOE_DE_LU);
+        this.log('[LOW_PRICE] Using ENTSO-E Transparency API as price data source (DE-LU)');
       } else {
         this.priceSource = new SmardPriceSource('DE-LU');
-        this.log('[LOW_PRICE] Using SMARD API as price data source (no Tibber token configured)');
+        this.log('[LOW_PRICE] Using SMARD API as price data source (default fallback)');
       }
 
       // Restore low battery device state

@@ -37,6 +37,17 @@
       "hint": {
         "en": "Enter your Skoda Connect refresh token"
       }
+    },
+    {
+      "id": "entsoe_api_key",
+      "type": "text",
+      "title": {
+        "en": "ENTSO-E Transparency API Key"
+      },
+      "value": "",
+      "hint": {
+        "en": "Security token from ENTSO-E Transparency Platform web API. When set (and no Tibber token), used as electricity price source for low-price charging."
+      }
     }
   ],
   "flow": {

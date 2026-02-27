@@ -10,6 +10,9 @@
     "homey:update": "npm run build && homey app update",
     "homey:start": "npm run build && homey app run --remote"
   },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.2"
+  },
   "devDependencies": {
     "@tsconfig/node16": "^16.1.8",
     "@types/homey": "npm:homey-apps-sdk-v3-types@^0.3.12",

@@ -2,6 +2,7 @@ import type Homey from 'homey';
 import type { PriceBlock, PriceCache } from '../../logic/lowPrice/types';
 import { TibberPriceSource } from '../../logic/lowPrice/sources/tibber';
 import { SmardPriceSource } from '../../logic/lowPrice/sources/smard';
+import { EntsoePriceSource } from '../../logic/lowPrice/sources/entsoe';
 import type { PriceDataSource } from '../../logic/lowPrice/priceSource';
 import { formatNextChargingTimes } from '../../logic/lowPrice/formatNextChargingTimes';
 import { findCheapestBlocks } from '../../logic/lowPrice/findCheapestHours';
@@ -104,7 +105,7 @@ export async function fetchAndUpdatePrices(
     try {
       priceData = await priceSource.fetch();
     } catch (error: unknown) {
-      // If Tibber fails and we're using Tibber, fall back to SMARD
+      // If Tibber or ENTSO-E fails, fall back to SMARD
       if (priceSource instanceof TibberPriceSource) {
         const errorMessage = extractErrorMessage(error);
         device.log(
@@ -112,7 +113,14 @@ export async function fetchAndUpdatePrices(
         );
         const fallbackSource = new SmardPriceSource('DE-LU');
         priceData = await fallbackSource.fetch();
-        // Update the price source reference (caller should handle this)
+        Object.setPrototypeOf(priceSource, fallbackSource);
+      } else if (priceSource instanceof EntsoePriceSource) {
+        const errorMessage = extractErrorMessage(error);
+        device.log(
+          `[LOW_PRICE] ENTSO-E API failed (${errorMessage}), falling back to SMARD API`,
+        );
+        const fallbackSource = new SmardPriceSource('DE-LU');
+        priceData = await fallbackSource.fetch();
         Object.setPrototypeOf(priceSource, fallbackSource);
       } else {
         throw error;

@@ -1,0 +1,83 @@
+import fs from 'fs';
+import path from 'path';
+
+import { EntsoePriceSource } from '../logic/lowPrice/sources/entsoe';
+
+describe('ENTSO-E price source', () => {
+  test('EntsoePriceSource returns 15-minute entries and converts €/MWh to €/kWh (PT60M)', async () => {
+    const xmlPath = path.join(__dirname, 'assets', 'entsoe-a44-sample.xml');
+    const xml = fs.readFileSync(xmlPath, 'utf8');
+
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(xml),
+      } as Response),
+    ) as jest.Mock;
+
+    const source = new EntsoePriceSource('test-token');
+    const entries = await source.fetch();
+
+    // 2 hourly points expanded to 4 each = 8 entries
+    expect(entries.length).toBe(8);
+    expect(entries[0]).toHaveProperty('date');
+    expect(entries[0]).toHaveProperty('price');
+    expect(typeof entries[0].price).toBe('number');
+
+    // First hour: 85.50 €/MWh = 0.0855 €/kWh (all four 15-min blocks same price)
+    expect(entries[0].price).toBeCloseTo(0.0855, 4);
+    expect(entries[1].price).toBeCloseTo(0.0855, 4);
+    expect(entries[2].price).toBeCloseTo(0.0855, 4);
+    expect(entries[3].price).toBeCloseTo(0.0855, 4);
+    // Second hour: 72.30 €/MWh = 0.0723 €/kWh
+    expect(entries[4].price).toBeCloseTo(0.0723, 4);
+    expect(entries[5].price).toBeCloseTo(0.0723, 4);
+    expect(entries[6].price).toBeCloseTo(0.0723, 4);
+    expect(entries[7].price).toBeCloseTo(0.0723, 4);
+
+    expect(entries[0].date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    const sorted = [...entries].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    expect(sorted).toEqual(entries);
+  });
+
+  test('EntsoePriceSource throws on HTTP error', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+      } as Response),
+    ) as jest.Mock;
+
+    const source = new EntsoePriceSource('bad-token');
+    await expect(source.fetch()).rejects.toThrow('ENTSO-E API failed: 401 Unauthorized');
+  });
+
+  test('EntsoePriceSource throws on unsupported resolution', async () => {
+    const xml = `<?xml version="1.0"?>
+<Publication_MarketDocument>
+  <TimeSeries>
+    <Period>
+      <timeInterval><start>2025-02-26T23:00Z</start></timeInterval>
+      <resolution>PT30M</resolution>
+      <Point><position>1</position><price.amount>50</price.amount></Point>
+    </Period>
+  </TimeSeries>
+</Publication_MarketDocument>`;
+
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(xml),
+      } as Response),
+    ) as jest.Mock;
+
+    const source = new EntsoePriceSource('test-token');
+    await expect(source.fetch()).rejects.toThrow('Unsupported resolution');
+  });
+
+  test('EntsoePriceSource throws when API key is empty', () => {
+    expect(() => new EntsoePriceSource('')).toThrow('ENTSO-E API key is required');
+    expect(() => new EntsoePriceSource('   ')).toThrow('ENTSO-E API key is required');
+  });
+});
