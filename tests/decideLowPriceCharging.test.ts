@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import type { PriceBlock, PriceCache } from '../logic/lowPrice/types';
+import { getUTCDayKey } from '../logic/utils/dateUtils';
 import { findCheapestBlocks } from '../logic/lowPrice/findCheapestHours';
 import { decideLowPriceCharging } from '../logic/lowPrice/decideLowPriceCharging';
 
@@ -9,10 +10,14 @@ function loadPriceCacheFromJson(): PriceCache {
   const filePath = path.join(__dirname, 'assets', 'priceCache.json');
   const raw = fs.readFileSync(filePath, 'utf8');
   const blocks = JSON.parse(raw) as Array<PriceBlock>;
-
   const cache: PriceCache = {};
   for (const b of blocks) {
-    cache[String(b.start)] = b;
+    const key = getUTCDayKey(b.start);
+    if (!cache[key]) cache[key] = [];
+    cache[key].push(b);
+  }
+  for (const key of Object.keys(cache)) {
+    cache[key].sort((a, b) => a.start - b.start);
   }
   return cache;
 }
@@ -296,26 +301,21 @@ describe('decideLowPriceCharging', () => {
     test('does not charge today when today is skipped due to being more expensive', () => {
       const now = Date.now();
       const blockDuration = 15 * 60 * 1000;
-
-      // Create cache where today is more expensive than tomorrow
-      const testCache: PriceCache = {};
-
-      // Today's blocks (expensive) - starting 1 hour from now
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now + (60 * 60 * 1000) + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
-
-      // Tomorrow's blocks (cheap)
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Find cheapest blocks (should skip today and return tomorrow's blocks)
       const cheapest = findCheapestBlocks(testCache, 4, now);
 
       // Should return 8 blocks from tomorrow (2x count)
@@ -343,26 +343,21 @@ describe('decideLowPriceCharging', () => {
     test('turns off charging if was on due to price when today is skipped', () => {
       const now = Date.now();
       const blockDuration = 15 * 60 * 1000;
-
-      // Create cache where today is more expensive than tomorrow
-      const testCache: PriceCache = {};
-
-      // Today's blocks (expensive) - starting 1 hour from now
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now + (60 * 60 * 1000) + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
-
-      // Tomorrow's blocks (cheap)
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Find cheapest blocks (should skip today and return tomorrow's blocks)
       const cheapest = findCheapestBlocks(testCache, 4, now);
 
       // Verify that decideLowPriceCharging turns off if was on due to price

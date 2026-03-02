@@ -1,5 +1,5 @@
 import type { PriceBlock, PriceCache } from './types';
-import { getUTCDayStartMs, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
+import { getUTCDayKey, getUTCDayStartMs, MILLISECONDS_PER_DAY } from '../utils/dateUtils';
 
 /**
  * Check if a block is on a specific UTC date
@@ -23,7 +23,7 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
 
 /**
  * Find cheapest blocks from cached price data.
- * - Only the raw price data is cached in `price_cache`
+ * - Cache is organized by day (YYYY-MM-DD); cheap block logic uses it consistently
  * - This function always recalculates the cheapest blocks using the current `count`
  * - `now` is passed in for testability; defaults to current time.
  * - Finds the cheapest individual blocks (not necessarily consecutive)
@@ -40,13 +40,12 @@ export function findCheapestBlocks(
   count: number,
   now: number = Date.now(),
 ): Array<PriceBlock> {
+  const todayKey = getUTCDayKey(now);
+  const tomorrowKey = getUTCDayKey(now + MILLISECONDS_PER_DAY);
   const todayUtcDayStart = getUTCDayStartMs(now);
   const tomorrowUtcDayStart = getUTCDayStartMs(now + MILLISECONDS_PER_DAY);
 
-  // Filter relevant blocks (today and tomorrow)
-  const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-    return isBlockOnDay(b, todayUtcDayStart) || isBlockOnDay(b, tomorrowUtcDayStart);
-  }) as Array<PriceBlock>;
+  const relevantBlocks = (cache[todayKey] || []).concat(cache[tomorrowKey] || []);
 
   if (relevantBlocks.length === 0 || count <= 0) {
     return [];

@@ -1,36 +1,31 @@
 import type { PriceBlock, PriceCache } from '../logic/lowPrice/types';
-import { getTodayUTCDayStartMs, getTomorrowUTCDayStartMs, getUTCDayStartMs } from '../logic/utils/dateUtils';
+import { getTodayUTCDayStartMs, getTomorrowUTCDayStartMs, getUTCDayKey, getUTCDayStartMs } from '../logic/utils/dateUtils';
 import { findCheapestBlocks } from '../logic/lowPrice/findCheapestHours';
 
 describe('block identification (today vs tomorrow, future vs past)', () => {
-  // Create test cache with blocks spanning today and tomorrow
   function createTestCache(now: number, opts?: { tomorrowBasePrice?: number }): PriceCache {
     const today = new Date(now);
     today.setUTCHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
 
-    const blockDuration = 15 * 60 * 1000; // 15 minutes
-    const cache: PriceCache = {};
+    const blockDuration = 15 * 60 * 1000;
     const tomorrowBasePrice = opts?.tomorrowBasePrice ?? 0.05;
+    const todayKey = getUTCDayKey(today.getTime());
+    const tomorrowKey = getUTCDayKey(tomorrow.getTime());
+    const todayBlocks: PriceBlock[] = [];
+    const tomorrowBlocks: PriceBlock[] = [];
 
-    // Add blocks for today (some past, some future)
     for (let i = 0; i < 96; i++) {
       const start = today.getTime() + i * blockDuration;
-      const end = start + blockDuration;
-      const price = 0.10 + (i % 10) * 0.01; // Varying prices
-      cache[String(start)] = { start, end, price };
+      todayBlocks.push({ start, end: start + blockDuration, price: 0.10 + (i % 10) * 0.01 });
     }
-
-    // Add blocks for tomorrow
     for (let i = 0; i < 96; i++) {
       const start = tomorrow.getTime() + i * blockDuration;
-      const end = start + blockDuration;
-      const price = tomorrowBasePrice + (i % 10) * 0.01;
-      cache[String(start)] = { start, end, price };
+      tomorrowBlocks.push({ start, end: start + blockDuration, price: tomorrowBasePrice + (i % 10) * 0.01 });
     }
 
-    return cache;
+    return { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
   }
 
   test('finds cheapest blocks from today when future blocks available', () => {
@@ -105,33 +100,31 @@ describe('block identification (today vs tomorrow, future vs past)', () => {
   });
 
   test('does not treat same day-of-month from previous month/year as today (regression)', () => {
-    // Now is 2026-01-20 07:55 UTC-ish like the report
     const now = Date.UTC(2026, 0, 20, 7, 55, 0);
-
     const todayStart = getTodayUTCDayStartMs(now);
     const tomorrowStart = getTomorrowUTCDayStartMs(now);
-
     const blockDuration = 15 * 60 * 1000;
-    const cache: PriceCache = {};
 
-    // Old cached block on "day 20" but different month/year (should NOT be relevant)
-    const oldMonthSameDay = Date.UTC(2025, 11, 20, 1, 0, 0); // 2025-12-20 01:00Z
-    cache[String(oldMonthSameDay)] = {
-      start: oldMonthSameDay,
-      end: oldMonthSameDay + blockDuration,
-      price: 0.0001, // extremely cheap to ensure it would win if incorrectly included
-    };
-
-    // Add a few real blocks for today/tomorrow (more expensive)
-    cache[String(todayStart + 12 * blockDuration)] = {
+    const oldMonthSameDay = Date.UTC(2025, 11, 20, 1, 0, 0);
+    const todayBlock = {
       start: todayStart + 12 * blockDuration,
       end: todayStart + 13 * blockDuration,
       price: 0.10,
     };
-    cache[String(tomorrowStart + 4 * blockDuration)] = {
+    const tomorrowBlock = {
       start: tomorrowStart + 4 * blockDuration,
       end: tomorrowStart + 5 * blockDuration,
       price: 0.09,
+    };
+
+    const cache: PriceCache = {
+      [getUTCDayKey(oldMonthSameDay)]: [{
+        start: oldMonthSameDay,
+        end: oldMonthSameDay + blockDuration,
+        price: 0.0001,
+      }],
+      [getUTCDayKey(todayBlock.start)]: [todayBlock],
+      [getUTCDayKey(tomorrowBlock.start)]: [tomorrowBlock],
     };
 
     const cheapest = findCheapestBlocks(cache, 8, now);

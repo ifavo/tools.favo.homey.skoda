@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import type { PriceBlock, PriceCache } from '../logic/lowPrice/types';
+import { getUTCDayKey } from '../logic/utils/dateUtils';
 import { findCheapestBlocks } from '../logic/lowPrice/findCheapestHours';
 import { formatNextChargingTimes, formatTime } from '../logic/lowPrice/formatNextChargingTimes';
 
@@ -9,10 +10,14 @@ function loadPriceCacheFromJson(): PriceCache {
   const filePath = path.join(__dirname, 'assets', 'priceCache.json');
   const raw = fs.readFileSync(filePath, 'utf8');
   const blocks = JSON.parse(raw) as Array<PriceBlock>;
-
   const cache: PriceCache = {};
   for (const b of blocks) {
-    cache[String(b.start)] = b;
+    const key = getUTCDayKey(b.start);
+    if (!cache[key]) cache[key] = [];
+    cache[key].push(b);
+  }
+  for (const key of Object.keys(cache)) {
+    cache[key].sort((a, b) => a.start - b.start);
   }
   return cache;
 }

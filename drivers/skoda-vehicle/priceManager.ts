@@ -10,7 +10,9 @@ import { findCheapestBlocks } from '../../logic/lowPrice/findCheapestHours';
 import {
   getTodayUTCDayStartMs,
   getTomorrowUTCDayStartMs,
+  getUTCDayKey,
   getUTCDayStartMs,
+  MILLISECONDS_PER_DAY,
   MILLISECONDS_PER_MINUTE,
 } from '../../logic/utils/dateUtils';
 import { extractErrorMessage } from '../../logic/utils/errorUtils';
@@ -58,17 +60,56 @@ function formatPrice(price: number, decimals: number = 5): string {
 }
 
 /**
- * Load price cache from device store
+ * Detect old cache format (flat Record<timestamp, PriceBlock>) for migration.
+ */
+function isOldCacheFormat(cached: unknown): cached is Record<string, PriceBlock> {
+  if (!cached || typeof cached !== 'object' || Array.isArray(cached)) return false;
+  const vals = Object.values(cached);
+  if (vals.length === 0) return false;
+  const first = vals[0];
+  return (
+    !Array.isArray(first) &&
+    typeof first === 'object' &&
+    first !== null &&
+    'start' in first &&
+    'end' in first &&
+    'price' in first
+  );
+}
+
+/**
+ * Migrate old flat cache (keyed by block start ms) to day-based cache (keyed by YYYY-MM-DD).
+ */
+function migrateOldCacheToDayBased(old: Record<string, PriceBlock>): PriceCache {
+  const byDay: PriceCache = {};
+  for (const block of Object.values(old)) {
+    const key = getUTCDayKey(block.start);
+    if (!byDay[key]) byDay[key] = [];
+    byDay[key].push(block);
+  }
+  for (const key of Object.keys(byDay)) {
+    byDay[key].sort((a, b) => a.start - b.start);
+  }
+  return byDay;
+}
+
+/**
+ * Load price cache from device store.
+ * Migrates old format (flat by block timestamp) to day-based format on first load.
  * @param device - Homey device instance
- * @returns Price cache object
+ * @returns Price cache object (days -> blocks)
  */
 export async function loadPriceCache(device: Homey.Device): Promise<PriceCache> {
   try {
     const cached = await device.getStoreValue('price_cache');
-    if (cached) {
-      return cached as PriceCache;
+    if (!cached) return {};
+    if (isOldCacheFormat(cached)) {
+      device.log('[LOW_PRICE] Migrating price cache from flat to day-based format');
+      const migrated = migrateOldCacheToDayBased(cached);
+      await device.setStoreValue('price_cache', migrated).catch(() => {});
+      return migrated;
     }
-    return {};
+    return cached as PriceCache;
   } catch (error: unknown) {
     device.log('[LOW_PRICE] Could not load price cache from store, starting fresh');
     return {};
@@ -135,14 +176,9 @@ export async function fetchAndUpdatePrices(
       }
     }
 
-    // Update cache with new prices
-    // Each entry is a 15-minute block
+    // Group new data by UTC day and overwrite those days in cache (update on new data)
     const BLOCK_DURATION_MINUTES = 15;
     const blockDurationMs = BLOCK_DURATION_MINUTES * MILLISECONDS_PER_MINUTE;
-
-    let newBlocks = 0;
-    let updatedBlocks = 0;
-    let priceChanges = 0;
 
     // Log first and last entries to verify timezone handling
     if (priceData.length > 0) {
@@ -161,46 +197,42 @@ export async function fetchAndUpdatePrices(
       );
     }
 
+    const blocksByDay: Record<string, PriceBlock[]> = {};
     for (const entry of priceData) {
       const startTimestamp = new Date(entry.date).getTime();
       const endTimestamp = startTimestamp + blockDurationMs;
-
-      // Price is already in €/kWh from the price source
       const priceInEuros = entry.price;
-
-      // Check if this block already exists in cache
-      const existingBlock = cache[startTimestamp];
-      const isUpdate = existingBlock !== undefined;
-
-      // Update or add the block (this will overwrite existing entries with new prices)
-      cache[startTimestamp] = {
-        start: startTimestamp,
-        end: endTimestamp,
-        price: priceInEuros,
-      };
-
-      if (isUpdate) {
-        updatedBlocks++;
-        // Log if price actually changed
-        if (existingBlock.price !== priceInEuros) {
-          priceChanges++;
-          device.log(
-            `[LOW_PRICE] Price updated for ${new Date(startTimestamp).toISOString()}: `
-            + `${formatPrice(existingBlock.price, 4)} → ${formatPrice(priceInEuros, 4)}`,
-          );
-        }
-      } else {
-        newBlocks++;
-      }
+      const dayKey = getUTCDayKey(startTimestamp);
+      if (!blocksByDay[dayKey]) blocksByDay[dayKey] = [];
+      blocksByDay[dayKey].push({ start: startTimestamp, end: endTimestamp, price: priceInEuros });
     }
 
-    // Save cache to device store
+    let daysUpdated = 0;
+    for (const [dayKey, blocks] of Object.entries(blocksByDay)) {
+      blocks.sort((a, b) => a.start - b.start);
+      cache[dayKey] = blocks;
+      daysUpdated++;
+    }
+
     await savePriceCache(device, cache);
 
+    const now = Date.now();
+    const todayKey = getUTCDayKey(now);
+    const tomorrowKey = getUTCDayKey(now + MILLISECONDS_PER_DAY);
+    const todayBlockCount = (cache[todayKey] || []).length;
+    const tomorrowBlockCount = (cache[tomorrowKey] || []).length;
+
     device.log(
-      `[LOW_PRICE] Updated price cache: ${newBlocks} new blocks, ${updatedBlocks} existing blocks updated `
-      + `(${priceChanges} with price changes), total ${priceData.length} blocks (15-minute intervals)`,
+      `[LOW_PRICE] Updated price cache: ${daysUpdated} days overwritten, ${priceData.length} blocks (15-minute intervals)`,
     );
+    device.log(
+      `[LOW_PRICE] Cache day coverage: today ${todayKey} ${todayBlockCount} blocks, tomorrow ${tomorrowKey} ${tomorrowBlockCount} blocks`,
+    );
+    if (todayBlockCount === 0) {
+      device.log(
+        '[LOW_PRICE] Warning: no blocks for today in cache (fetch may have returned no today data, or save failed previously)',
+      );
+    }
     return cache;
   } catch (error: unknown) {
     const errorMessage = extractErrorMessage(error);
@@ -224,13 +256,10 @@ export function findCheapestBlocksWithLogging(
   count: number,
 ): Array<PriceBlock> {
   const now = Date.now();
-  const allBlocks = Object.values(cache);
-  const relevantBlocks = Object.values(cache).filter((b: PriceBlock) => {
-    const todayUtcDayStart = getTodayUTCDayStartMs(now);
-    const tomorrowUtcDayStart = getTomorrowUTCDayStartMs(now);
-    const d = getUTCDayStartMs(b.start);
-    return d === todayUtcDayStart || d === tomorrowUtcDayStart;
-  }) as Array<PriceBlock>;
+  const todayKey = getUTCDayKey(now);
+  const tomorrowKey = getUTCDayKey(now + MILLISECONDS_PER_DAY);
+  const relevantBlocks = (cache[todayKey] || []).concat(cache[tomorrowKey] || []);
+  const allBlocks = Object.values(cache).flat();
 
   // Log cache statistics for debugging
   const pastBlocks = relevantBlocks.filter((b) => b.start <= now);

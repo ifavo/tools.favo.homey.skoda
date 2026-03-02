@@ -53,12 +53,13 @@ describe('Price manager SMARD to Smart Energy fallback', () => {
       expect.stringContaining('falling back to Smart Energy API'),
     );
 
-    const cacheEntries = Object.values(updatedCache);
-    expect(cacheEntries.length).toBeGreaterThan(0);
-    expect(cacheEntries[0]).toHaveProperty('start');
-    expect(cacheEntries[0]).toHaveProperty('end');
-    expect(cacheEntries[0]).toHaveProperty('price');
-    expect(cacheEntries[0].price).toBeCloseTo(0.0773, 4);
+    const allBlocks = Object.values(updatedCache).flat();
+    expect(allBlocks.length).toBeGreaterThan(0);
+    const firstBlock = allBlocks[0];
+    expect(firstBlock).toHaveProperty('start');
+    expect(firstBlock).toHaveProperty('end');
+    expect(firstBlock).toHaveProperty('price');
+    expect(firstBlock.price).toBeCloseTo(0.0773, 4);
 
     expect(device.setStoreValue).toHaveBeenCalledWith('price_cache', expect.any(Object));
   });

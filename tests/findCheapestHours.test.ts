@@ -2,18 +2,27 @@ import fs from 'fs';
 import path from 'path';
 
 import type { PriceBlock, PriceCache } from '../logic/lowPrice/types';
+import { getUTCDayKey } from '../logic/utils/dateUtils';
 import { findCheapestBlocks } from '../logic/lowPrice/findCheapestHours';
+
+function blocksToDayBasedCache(blocks: PriceBlock[]): PriceCache {
+  const cache: PriceCache = {};
+  for (const b of blocks) {
+    const key = getUTCDayKey(b.start);
+    if (!cache[key]) cache[key] = [];
+    cache[key].push(b);
+  }
+  for (const key of Object.keys(cache)) {
+    cache[key].sort((a, b) => a.start - b.start);
+  }
+  return cache;
+}
 
 function loadPriceCacheFromJson(): PriceCache {
   const filePath = path.join(__dirname, 'assets', 'priceCache.json');
   const raw = fs.readFileSync(filePath, 'utf8');
   const blocks = JSON.parse(raw) as Array<PriceBlock>;
-
-  const cache: PriceCache = {};
-  for (const b of blocks) {
-    cache[String(b.start)] = b;
-  }
-  return cache;
+  return blocksToDayBasedCache(blocks);
 }
 
 describe('findCheapestBlocks', () => {
@@ -92,15 +101,15 @@ describe('findCheapestBlocks', () => {
       const now = Date.now();
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
-      const pastCache: PriceCache = {};
-      // Create blocks earlier today (but still same UTC day)
+      const dayKey = getUTCDayKey(today.getTime());
+      const pastBlocks: PriceBlock[] = [];
       for (let i = 1; i <= 10; i++) {
-        const start = today.getTime() + (i * 15 * 60 * 1000); // i*15 minutes after midnight
+        const start = today.getTime() + (i * 15 * 60 * 1000);
         const end = start + 15 * 60 * 1000;
-        pastCache[String(start)] = { start, end, price: 0.1 };
+        pastBlocks.push({ start, end, price: 0.1 });
       }
-      // Set now to later in the day so blocks are in past
-      const laterNow = today.getTime() + (20 * 60 * 60 * 1000); // 20:00 UTC
+      const pastCache: PriceCache = { [dayKey]: pastBlocks };
+      const laterNow = today.getTime() + (20 * 60 * 60 * 1000);
       const result = findCheapestBlocks(pastCache, 8, laterNow);
       // Should return empty array since all blocks are in past and no tomorrow blocks
       expect(result.length).toBe(0);
@@ -121,16 +130,15 @@ describe('findCheapestBlocks', () => {
       // They are different, so the comparison should work correctly
       expect(dec31Date.getUTCDate()).not.toBe(jan1Date.getUTCDate());
       
-      // Create cache with blocks on Dec 31
-      const cacheDec31: PriceCache = {};
       const blockDuration = 15 * 60 * 1000;
+      const dec31Blocks: PriceBlock[] = [];
       for (let i = 0; i < 10; i++) {
         const start = dec31 + (i * blockDuration);
         const end = start + blockDuration;
-        cacheDec31[String(start)] = { start, end, price: 0.1 };
+        dec31Blocks.push({ start, end, price: 0.1 });
       }
-      
-      // Query on Jan 1 should NOT return Dec 31 blocks
+      const cacheDec31: PriceCache = { [getUTCDayKey(dec31)]: dec31Blocks };
+
       const result = findCheapestBlocks(cacheDec31, 5, jan1);
       expect(result.length).toBe(0); // Should be empty since no blocks on Jan 1
     });
@@ -139,17 +147,14 @@ describe('findCheapestBlocks', () => {
   describe('edge cases - price handling', () => {
     test('handles duplicate prices', () => {
       const now = Date.now();
-      const today = new Date(now);
-      today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const duplicateCache: PriceCache = {};
-      // Create blocks with same price in the future
-      // Start from 1 hour in the future to ensure they're all future blocks
+      const blocks: PriceBlock[] = [];
       for (let i = 0; i < 10; i++) {
-        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
         const end = start + blockDuration;
-        duplicateCache[String(start)] = { start, end, price: 0.1 }; // All same price
+        blocks.push({ start, end, price: 0.1 });
       }
+      const duplicateCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(duplicateCache, 5, now);
       // Should return 5 blocks, sorted by time
       expect(result.length).toBe(5);
@@ -160,18 +165,14 @@ describe('findCheapestBlocks', () => {
 
     test('handles negative prices', () => {
       const now = Date.now();
-      const today = new Date(now);
-      today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const negativeCache: PriceCache = {};
-      // Create blocks with negative prices in the future (shouldn't happen but test robustness)
-      // Prices: -0.5, -0.4, -0.3, -0.2, -0.1 (most negative = cheapest)
-      // Start from 1 hour in the future to ensure they're all future blocks
+      const blocks: PriceBlock[] = [];
       for (let i = 0; i < 5; i++) {
-        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
         const end = start + blockDuration;
-        negativeCache[String(start)] = { start, end, price: -0.1 * (5 - i) }; // -0.5, -0.4, -0.3, -0.2, -0.1
+        blocks.push({ start, end, price: -0.1 * (5 - i) });
       }
+      const negativeCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(negativeCache, 3, now);
       // Should return 3 cheapest blocks (most negative), then sorted by time
       expect(result.length).toBe(3);
@@ -188,17 +189,14 @@ describe('findCheapestBlocks', () => {
 
     test('handles very large prices', () => {
       const now = Date.now();
-      const today = new Date(now);
-      today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const largeCache: PriceCache = {};
-      // Create blocks with very large prices in the future
-      // Start from 1 hour in the future to ensure they're all future blocks
+      const blocks: PriceBlock[] = [];
       for (let i = 0; i < 5; i++) {
-        const start = now + (60 * 60 * 1000) + (i * blockDuration); // 1 hour + i*15min in future
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
         const end = start + blockDuration;
-        largeCache[String(start)] = { start, end, price: 1000000 + i }; // Very large prices
+        blocks.push({ start, end, price: 1000000 + i });
       }
+      const largeCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(largeCache, 2, now);
       // Should still work correctly
       expect(result.length).toBe(2);
@@ -210,17 +208,13 @@ describe('findCheapestBlocks', () => {
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const infinityCache: PriceCache = {};
-      // Create blocks with Infinity and normal prices
+      const blocks: PriceBlock[] = [];
       for (let i = 0; i < 5; i++) {
         const start = today.getTime() + i * blockDuration;
         const end = start + blockDuration;
-        infinityCache[String(start)] = {
-          start,
-          end,
-          price: i === 0 ? Infinity : 0.1 + i, // First block has Infinity
-        };
+        blocks.push({ start, end, price: i === 0 ? Infinity : 0.1 + i });
       }
+      const infinityCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(infinityCache, 3, now);
       // Should return blocks, Infinity should be treated as most expensive
       expect(result.length).toBe(3);
@@ -233,17 +227,13 @@ describe('findCheapestBlocks', () => {
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const maxValueCache: PriceCache = {};
-      // Create blocks with Number.MAX_VALUE and normal prices
+      const blocks: PriceBlock[] = [];
       for (let i = 0; i < 5; i++) {
         const start = today.getTime() + i * blockDuration;
         const end = start + blockDuration;
-        maxValueCache[String(start)] = {
-          start,
-          end,
-          price: i === 0 ? Number.MAX_VALUE : 0.1 + i,
-        };
+        blocks.push({ start, end, price: i === 0 ? Number.MAX_VALUE : 0.1 + i });
       }
+      const maxValueCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(maxValueCache, 3, now);
       // Should return blocks, MAX_VALUE should be treated as most expensive
       expect(result.length).toBe(3);
@@ -256,16 +246,12 @@ describe('findCheapestBlocks', () => {
       const now = Date.now();
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
-      const invalidCache: PriceCache = {};
-      // Create invalid block where end < start
       const invalidBlock: PriceBlock = {
         start: today.getTime() + 1000,
-        end: today.getTime(), // end before start
+        end: today.getTime(),
         price: 0.1,
       };
-      invalidCache[String(invalidBlock.start)] = invalidBlock;
-      // Function should not crash, but behavior is undefined
-      // Just verify it doesn't throw
+      const invalidCache: PriceCache = { [getUTCDayKey(invalidBlock.start)]: [invalidBlock] };
       expect(() => findCheapestBlocks(invalidCache, 1, now)).not.toThrow();
     });
 
@@ -274,21 +260,14 @@ describe('findCheapestBlocks', () => {
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const nanCache: PriceCache = {};
-      // Create blocks with NaN start (shouldn't happen but test robustness)
       const validStart = today.getTime();
-      nanCache[String(validStart)] = {
-        start: validStart,
-        end: validStart + blockDuration,
-        price: 0.1,
+      const dayKey = getUTCDayKey(validStart);
+      const nanCache: PriceCache = {
+        [dayKey]: [
+          { start: validStart, end: validStart + blockDuration, price: 0.1 },
+          { start: NaN, end: NaN + blockDuration, price: 0.1 },
+        ],
       };
-      // Add block with NaN start (invalid)
-      nanCache['NaN'] = {
-        start: NaN,
-        end: NaN + blockDuration,
-        price: 0.1,
-      };
-      // Function should filter out NaN blocks or handle gracefully
       const result = findCheapestBlocks(nanCache, 1, now);
       // Should return valid blocks only
       expect(result.every(b => !isNaN(b.start) && !isNaN(b.end))).toBe(true);
@@ -299,13 +278,14 @@ describe('findCheapestBlocks', () => {
       const today = new Date(now);
       today.setUTCHours(0, 0, 0, 0);
       const blockDuration = 15 * 60 * 1000;
-      const duplicateStartCache: PriceCache = {};
       const start = today.getTime();
-      // Create multiple blocks with same start (shouldn't happen with proper cache, but test)
-      duplicateStartCache[String(start)] = { start, end: start + blockDuration, price: 0.1 };
-      duplicateStartCache[String(start) + '_2'] = { start, end: start + blockDuration * 2, price: 0.2 };
-      // Cache key is based on start, so second one would overwrite first
-      // But if both exist, function should handle it
+      const dayKey = getUTCDayKey(start);
+      const duplicateStartCache: PriceCache = {
+        [dayKey]: [
+          { start, end: start + blockDuration, price: 0.1 },
+          { start, end: start + blockDuration * 2, price: 0.2 },
+        ],
+      };
       const result = findCheapestBlocks(duplicateStartCache, 1, now);
       // Should return at least one block
       expect(result.length).toBeGreaterThanOrEqual(0);
@@ -347,16 +327,9 @@ describe('findCheapestBlocks', () => {
       const blockEnd = blockStart + blockDuration;
       
       const testCache: PriceCache = {
-        [String(blockStart)]: {
-          start: blockStart,
-          end: blockEnd,
-          price: 0.1, // Cheapest price
-        },
+        [getUTCDayKey(blockStart)]: [{ start: blockStart, end: blockEnd, price: 0.1 }],
       };
-      
-      // This test would FAIL with the old bug (b.start > now filter)
-      // The block starts exactly at now, so b.start > now is false → block excluded
-      // With the fix (b.end > now), the block should be included
+
       const result = findCheapestBlocks(testCache, 1, now);
       
       expect(result.length).toBe(1);
@@ -378,16 +351,9 @@ describe('findCheapestBlocks', () => {
       const nowAt2346 = new Date('2025-12-18T23:46:00+01:00').getTime();
       
       const testCache: PriceCache = {
-        [String(blockStart)]: {
-          start: blockStart,
-          end: blockEnd,
-          price: 0.1,
-        },
+        [getUTCDayKey(blockStart)]: [{ start: blockStart, end: blockEnd, price: 0.1 }],
       };
-      
-      // This test would FAIL with the old bug (b.start > now filter)
-      // b.start < now (we're in the middle), so b.start > now is false → block excluded
-      // With the fix (b.end > now), the block should be included
+
       const result = findCheapestBlocks(testCache, 1, nowAt2346);
       
       expect(result.length).toBe(1);
@@ -408,9 +374,8 @@ describe('findCheapestBlocks', () => {
         price: 0.1,
       };
       
-      // Block should be included in cheapest blocks
       const testCache: PriceCache = {
-        [String(block.start)]: block,
+        [getUTCDayKey(block.start)]: [block],
       };
       const cheapest = findCheapestBlocks(testCache, 1, now);
       
@@ -437,27 +402,21 @@ describe('findCheapestBlocks', () => {
       const tomorrowUTC = new Date(now + 24 * 60 * 60 * 1000).getUTCDate();
       const blockDuration = 15 * 60 * 1000;
 
-      // Create cache with:
-      // - Today's blocks: expensive (0.5 per block)
-      // - Tomorrow's blocks: cheap (0.1 per block)
-      const testCache: PriceCache = {};
-
-      // Today's blocks (expensive) - 8 blocks starting 1 hour from now
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now + (60 * 60 * 1000) + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
-
-      // Tomorrow's blocks (cheap) - 20 blocks
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Request 4 blocks - should skip today and return 8 blocks from tomorrow (2x count)
       const result = findCheapestBlocks(testCache, 4, now);
 
       // Should return 8 blocks (2x the requested count)
@@ -479,28 +438,21 @@ describe('findCheapestBlocks', () => {
       const now = Date.now();
       const todayUTC = new Date(now).getUTCDate();
       const blockDuration = 15 * 60 * 1000;
-
-      // Create cache with:
-      // - Today's blocks: cheap (0.1 per block)
-      // - Tomorrow's blocks: expensive (0.5 per block)
-      const testCache: PriceCache = {};
-
-      // Today's blocks (cheap) - 8 blocks starting 1 hour from now
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now + (60 * 60 * 1000) + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.1 });
       }
-
-      // Tomorrow's blocks (expensive) - 20 blocks
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Request 4 blocks - should use today (not skip)
       const result = findCheapestBlocks(testCache, 4, now);
 
       // Should return 4 blocks from today
@@ -522,26 +474,21 @@ describe('findCheapestBlocks', () => {
       const now = Date.now();
       const todayUTC = new Date(now).getUTCDate();
       const blockDuration = 15 * 60 * 1000;
-
-      // Create cache with same price for today and tomorrow
-      const testCache: PriceCache = {};
-
-      // Today's blocks - 8 blocks starting 1 hour from now
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now + (60 * 60 * 1000) + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.2 };
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.2 });
       }
-
-      // Tomorrow's blocks - 20 blocks
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.2 }; // Same price
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.2 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Request 4 blocks - should use today (not skip when equal)
       const result = findCheapestBlocks(testCache, 4, now);
 
       // Should return 4 blocks from today
@@ -558,28 +505,21 @@ describe('findCheapestBlocks', () => {
       const now = Date.now();
       const tomorrowUTC = new Date(now + 24 * 60 * 60 * 1000).getUTCDate();
       const blockDuration = 15 * 60 * 1000;
-
-      // Create cache with:
-      // - Today's blocks: all in the past (expensive)
-      // - Tomorrow's blocks: cheap
-      const testCache: PriceCache = {};
-
-      // Today's blocks (all in past) - expensive
+      const todayKey = getUTCDayKey(now);
+      const tomorrowKey = getUTCDayKey(now + 24 * 60 * 60 * 1000);
+      const todayBlocks: PriceBlock[] = [];
       for (let i = 0; i < 8; i++) {
         const start = now - (2 * 60 * 60 * 1000) - ((8 - i) * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.5 }; // Expensive, but in past
+        todayBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
-
-      // Tomorrow's blocks (cheap) - 20 blocks
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
+      const tomorrowBlocks: PriceBlock[] = [];
       for (let i = 0; i < 20; i++) {
         const start = tomorrowStart + (i * blockDuration);
-        const end = start + blockDuration;
-        testCache[String(start)] = { start, end, price: 0.1 }; // Cheap
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
       }
+      const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
-      // Request 4 blocks - should use tomorrow (today has no future blocks)
       const result = findCheapestBlocks(testCache, 4, now);
 
       // Should return 4 blocks from tomorrow (normal count, not 2x, since today has no future blocks)

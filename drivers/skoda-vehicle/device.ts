@@ -231,11 +231,11 @@ class SkodaVehicleDevice extends Homey.Device {
   async startPriceUpdates(): Promise<void> {
     this.stopPriceUpdates();
 
-    // Calculate delay until next 15-minute boundary
     const now = Date.now();
     const delayUntilBoundary = getMillisecondsUntilNext15MinuteBoundary(now);
-    
-    // Initial price update with error handling (run immediately to populate cache)
+
+    // Fetch on start so current day (and tomorrow) are in cache and available for logic/debugging
+    this.log('[LOW_PRICE] Fetching price data on start (including current day) to populate cache');
     try {
       await this.updatePricesAndCheckCharging();
     } catch (error: unknown) {
@@ -401,6 +401,7 @@ class SkodaVehicleDevice extends Homey.Device {
       // DEBUG STEP 1: log current hour cache (raw price data) in a JSON-friendly way
       try {
         const cacheArray = Object.values(updatedCache)
+          .flat()
           .sort((a: PriceBlock, b: PriceBlock) => a.start - b.start);
         const debugCache = cacheArray.map((b: PriceBlock) => ({
           start: b.start,

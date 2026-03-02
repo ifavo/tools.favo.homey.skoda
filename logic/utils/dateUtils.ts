@@ -41,6 +41,20 @@ export function getUTCDayStartMs(timestamp: number): number {
 }
 
 /**
+ * Get a stable string key for the UTC day of a timestamp (YYYY-MM-DD).
+ * Used to organize price cache by day for consistent overwrite/update.
+ * @param timestamp - Unix timestamp in milliseconds
+ * @returns Day key string e.g. "2026-03-02"
+ */
+export function getUTCDayKey(timestamp: number): string {
+  const d = new Date(timestamp);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
  * Get UTC day start timestamp for today.
  * @param now - Current timestamp (defaults to Date.now())
  * @returns UTC midnight timestamp for today
