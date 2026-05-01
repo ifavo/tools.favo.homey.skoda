@@ -176,7 +176,12 @@ export async function fetchAndUpdatePrices(
       }
     }
 
-    // Group new data by UTC day and overwrite those days in cache (update on new data)
+    // Update cache by upserting blocks by start timestamp.
+    //
+    // Important: Do NOT overwrite whole days. Some sources (notably ENTSO-E) can return
+    // partial or shifted day coverage around midday or around day boundaries (UTC vs local).
+    // Whole-day overwrite can wipe earlier blocks for "today", which breaks the current day's
+    // charging window and makes `is_low_price_now` flip unexpectedly.
     const BLOCK_DURATION_MINUTES = 15;
     const blockDurationMs = BLOCK_DURATION_MINUTES * MILLISECONDS_PER_MINUTE;
 
@@ -197,33 +202,72 @@ export async function fetchAndUpdatePrices(
       );
     }
 
-    const blocksByDay: Record<string, PriceBlock[]> = {};
+    const now = Date.now();
+
+    let daysTouched = new Set<string>();
+    let newBlocks = 0;
+    let updatedBlocks = 0;
+    let priceChanges = 0;
+
     for (const entry of priceData) {
       const startTimestamp = new Date(entry.date).getTime();
       const endTimestamp = startTimestamp + blockDurationMs;
       const priceInEuros = entry.price;
       const dayKey = getUTCDayKey(startTimestamp);
-      if (!blocksByDay[dayKey]) blocksByDay[dayKey] = [];
-      blocksByDay[dayKey].push({ start: startTimestamp, end: endTimestamp, price: priceInEuros });
+      daysTouched.add(dayKey);
+
+      const existingBlocks = cache[dayKey] || [];
+      const existingIdx = existingBlocks.findIndex((b) => b.start === startTimestamp);
+      const block: PriceBlock = { start: startTimestamp, end: endTimestamp, price: priceInEuros };
+
+      if (existingIdx >= 0) {
+        updatedBlocks++;
+        if (existingBlocks[existingIdx].price !== priceInEuros) priceChanges++;
+        const next = [...existingBlocks];
+        next[existingIdx] = block;
+        next.sort((a, b) => a.start - b.start);
+        cache[dayKey] = next;
+      } else {
+        newBlocks++;
+        const next = [...existingBlocks, block];
+        next.sort((a, b) => a.start - b.start);
+        cache[dayKey] = next;
+      }
     }
 
-    let daysUpdated = 0;
-    for (const [dayKey, blocks] of Object.entries(blocksByDay)) {
-      blocks.sort((a, b) => a.start - b.start);
-      cache[dayKey] = blocks;
-      daysUpdated++;
+    // Keep cache bounded: we only need a small rolling window.
+    // (yesterday, today, tomorrow, dayAfterTomorrow)
+    const dayKeysToKeep = new Set<string>();
+    const yesterdayKey = getUTCDayKey(now - MILLISECONDS_PER_DAY);
+    const todayKeepKey = getUTCDayKey(now);
+    const tomorrowKeepKey = getUTCDayKey(now + MILLISECONDS_PER_DAY);
+    const dayAfterTomorrowKey = getUTCDayKey(now + 2 * MILLISECONDS_PER_DAY);
+    dayKeysToKeep.add(yesterdayKey);
+    dayKeysToKeep.add(todayKeepKey);
+    dayKeysToKeep.add(tomorrowKeepKey);
+    dayKeysToKeep.add(dayAfterTomorrowKey);
+    // Also keep any days we just touched in this fetch, even if their timestamps
+    // are outside the rolling "now" window (important for deterministic tests
+    // and for occasional provider backfills).
+    for (const key of daysTouched) {
+      dayKeysToKeep.add(key);
+    }
+    for (const key of Object.keys(cache)) {
+      if (!dayKeysToKeep.has(key)) {
+        delete cache[key];
+      }
     }
 
+    const daysUpdated = daysTouched.size;
     await savePriceCache(device, cache);
 
-    const now = Date.now();
     const todayKey = getUTCDayKey(now);
     const tomorrowKey = getUTCDayKey(now + MILLISECONDS_PER_DAY);
     const todayBlockCount = (cache[todayKey] || []).length;
     const tomorrowBlockCount = (cache[tomorrowKey] || []).length;
 
     device.log(
-      `[LOW_PRICE] Updated price cache: ${daysUpdated} days overwritten, ${priceData.length} blocks (15-minute intervals)`,
+      `[LOW_PRICE] Updated price cache: ${daysUpdated} days touched, ${priceData.length} blocks received (15-minute intervals), ${newBlocks} new, ${updatedBlocks} updated (${priceChanges} price changes)`,
     );
     device.log(
       `[LOW_PRICE] Cache day coverage: today ${todayKey} ${todayBlockCount} blocks, tomorrow ${tomorrowKey} ${tomorrowBlockCount} blocks`,

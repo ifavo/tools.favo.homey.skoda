@@ -179,6 +179,25 @@ class SkodaVehicleDevice extends Homey.Device {
    */
   async refreshStatus(): Promise<void> {
     await refreshVehicleStatus(this, this.chargingState);
+
+    // Safety net: if price updates silently stopped (e.g. timer issues),
+    // make sure we periodically refresh prices from the status polling loop.
+    try {
+      const lastPriceUpdate = this.getSetting('_last_price_update') as number | undefined;
+      const now = Date.now();
+      // Allow one missed 15-minute tick; treat data as stale after ~30 minutes.
+      const MAX_PRICE_AGE = 30 * MILLISECONDS_PER_MINUTE;
+
+      if (!lastPriceUpdate || now - lastPriceUpdate > MAX_PRICE_AGE) {
+        this.log(
+          '[LOW_PRICE] Detected stale or missing price data (no successful update within 30 minutes), forcing immediate price refresh from status poll',
+        );
+        await this.updatePricesAndCheckCharging();
+      }
+    } catch (error: unknown) {
+      const errorMessage = extractErrorMessage(error);
+      this.error('[LOW_PRICE] Failed to perform stale price check after status refresh:', errorMessage);
+    }
   }
 
   /**
@@ -458,6 +477,18 @@ class SkodaVehicleDevice extends Homey.Device {
         await turnOffChargingSelf(this, this.chargingState);
       }
       // noChange - decision logic already handled the reason
+
+      // Mark successful price update so the status polling safety net
+      // can detect when data becomes stale.
+      try {
+        const nowTimestamp = Date.now();
+        await this.setSettings({ _last_price_update: nowTimestamp });
+      } catch (timestampError: unknown) {
+        this.error(
+          '[LOW_PRICE] Failed to store last price update timestamp:',
+          extractErrorMessage(timestampError),
+        );
+      }
 
     } catch (error: unknown) {
       const errorMessage = extractErrorMessage(error);
