@@ -310,9 +310,13 @@ describe('decideLowPriceCharging', () => {
       }
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
       const tomorrowBlocks: PriceBlock[] = [];
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 8; i++) {
         const start = tomorrowStart + (i * blockDuration);
         tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
+      }
+      for (let i = 0; i < 12; i++) {
+        const start = tomorrowStart + ((8 + i) * blockDuration);
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
       const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
@@ -352,9 +356,13 @@ describe('decideLowPriceCharging', () => {
       }
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
       const tomorrowBlocks: PriceBlock[] = [];
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 8; i++) {
         const start = tomorrowStart + (i * blockDuration);
         tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
+      }
+      for (let i = 0; i < 12; i++) {
+        const start = tomorrowStart + ((8 + i) * blockDuration);
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
       const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 

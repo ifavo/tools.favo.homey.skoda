@@ -93,10 +93,11 @@ describe('block identification (today vs tomorrow, future vs past)', () => {
     // Request 8 blocks but only 2 future blocks available from today
     const cheapest = findCheapestBlocks(cache, 8, now);
 
-    // Should return available future blocks (from tomorrow)
+    // Falls back to tomorrow; includes all blocks at tomorrow's minimum price (10 blocks at 0.05)
     expect(cheapest.length).toBeGreaterThan(0);
-    expect(cheapest.length).toBeLessThanOrEqual(8);
+    expect(cheapest.length).toBe(10);
     expect(cheapest.every((b) => b.start > now)).toBe(true);
+    expect(cheapest.every((b) => b.price === 0.05)).toBe(true);
   });
 
   test('does not treat same day-of-month from previous month/year as today (regression)', () => {

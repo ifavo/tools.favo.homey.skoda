@@ -156,11 +156,86 @@ describe('findCheapestBlocks', () => {
       }
       const duplicateCache: PriceCache = blocksToDayBasedCache(blocks);
       const result = findCheapestBlocks(duplicateCache, 5, now);
-      // Should return 5 blocks, sorted by time
-      expect(result.length).toBe(5);
+      // All 10 blocks share the lowest price, so all are included even though count is 5
+      expect(result.length).toBe(10);
+      result.forEach((block) => {
+        expect(block.price).toBe(0.1);
+      });
       for (let i = 1; i < result.length; i++) {
         expect(result[i].start).toBeGreaterThan(result[i - 1].start);
       }
+    });
+
+    test('returns configured count when min price tier does not exceed count', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+      const blocks: PriceBlock[] = [];
+      for (let i = 0; i < 5; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.1 });
+      }
+      for (let i = 0; i < 5; i++) {
+        const start = now + (60 * 60 * 1000) + ((5 + i) * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.2 });
+      }
+      const cacheWithMixedPrices: PriceCache = blocksToDayBasedCache(blocks);
+      const result = findCheapestBlocks(cacheWithMixedPrices, 5, now);
+      expect(result.length).toBe(5);
+      result.forEach((block) => {
+        expect(block.price).toBe(0.1);
+      });
+    });
+
+    test('includes all blocks at lowest price when min tier exceeds count', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+      const blocks: PriceBlock[] = [];
+      for (let i = 0; i < 12; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.1 });
+      }
+      const cacheWithLongMinTier: PriceCache = blocksToDayBasedCache(blocks);
+      const result = findCheapestBlocks(cacheWithLongMinTier, 8, now);
+      expect(result.length).toBe(12);
+      result.forEach((block) => {
+        expect(block.price).toBe(0.1);
+      });
+      for (let i = 1; i < result.length; i++) {
+        expect(result[i].start).toBeGreaterThan(result[i - 1].start);
+      }
+    });
+
+    test('decideLowPriceCharging toggles ON for block beyond configured count when at min price', () => {
+      const { decideLowPriceCharging } = require('../logic/lowPrice/decideLowPriceCharging');
+
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+      const blocks: PriceBlock[] = [];
+      for (let i = 0; i < 12; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.1 });
+      }
+      const cacheWithLongMinTier: PriceCache = blocksToDayBasedCache(blocks);
+      const cheapest = findCheapestBlocks(cacheWithLongMinTier, 8, now);
+
+      expect(cheapest.length).toBe(12);
+
+      const ninthBlock = blocks[8];
+      const nowInNinthBlock = ninthBlock.start + (blockDuration / 2);
+
+      const decision = decideLowPriceCharging(cheapest, nowInNinthBlock, {
+        enableLowPrice: true,
+        batteryLevel: 80,
+        lowBatteryThreshold: 40,
+        manualOverrideActive: false,
+        wasOnDueToPrice: false,
+      });
+
+      expect(decision).toBe('turnOn');
     });
 
     test('handles negative prices', () => {
@@ -411,9 +486,13 @@ describe('findCheapestBlocks', () => {
       }
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
       const tomorrowBlocks: PriceBlock[] = [];
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 8; i++) {
         const start = tomorrowStart + (i * blockDuration);
         tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
+      }
+      for (let i = 0; i < 12; i++) {
+        const start = tomorrowStart + ((8 + i) * blockDuration);
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
       const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 
@@ -455,8 +534,8 @@ describe('findCheapestBlocks', () => {
 
       const result = findCheapestBlocks(testCache, 4, now);
 
-      // Should return 4 blocks from today
-      expect(result.length).toBe(4);
+      // All 8 today blocks share the lowest price, so all are included
+      expect(result.length).toBe(8);
 
       // All blocks should be from today
       result.forEach(block => {
@@ -491,8 +570,8 @@ describe('findCheapestBlocks', () => {
 
       const result = findCheapestBlocks(testCache, 4, now);
 
-      // Should return 4 blocks from today
-      expect(result.length).toBe(4);
+      // All 8 today blocks share the lowest price, so all are included
+      expect(result.length).toBe(8);
 
       // All blocks should be from today
       result.forEach(block => {
@@ -514,9 +593,13 @@ describe('findCheapestBlocks', () => {
       }
       const tomorrowStart = now + (24 * 60 * 60 * 1000);
       const tomorrowBlocks: PriceBlock[] = [];
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 4; i++) {
         const start = tomorrowStart + (i * blockDuration);
         tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.1 });
+      }
+      for (let i = 0; i < 16; i++) {
+        const start = tomorrowStart + ((4 + i) * blockDuration);
+        tomorrowBlocks.push({ start, end: start + blockDuration, price: 0.5 });
       }
       const testCache: PriceCache = { [todayKey]: todayBlocks, [tomorrowKey]: tomorrowBlocks };
 

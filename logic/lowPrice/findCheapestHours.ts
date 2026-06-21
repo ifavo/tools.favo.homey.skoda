@@ -12,13 +12,27 @@ function isBlockOnDay(block: PriceBlock, dayStartUtcMs: number): boolean {
 }
 
 /**
- * Sort blocks by price (cheapest first) and return top N
+ * Sort blocks by price (cheapest first) and return top N.
+ * When more blocks share the absolute lowest price than count, returns all blocks at that price.
  * @param blocks - Array of price blocks to sort
- * @param count - Number of cheapest blocks to return
+ * @param count - Target number of cheapest blocks to return
  * @returns Array of cheapest price blocks, sorted by price (ascending)
  */
 function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<PriceBlock> {
-  return [...blocks].sort((a, b) => a.price - b.price).slice(0, count);
+  const sorted = [...blocks].sort((a, b) => a.price - b.price);
+
+  if (sorted.length <= count) {
+    return sorted;
+  }
+
+  const minPrice = sorted[0].price;
+  const blocksAtMinPrice = sorted.filter((b) => b.price === minPrice);
+
+  if (blocksAtMinPrice.length > count) {
+    return blocksAtMinPrice;
+  }
+
+  return sorted.slice(0, count);
 }
 
 /**
@@ -31,7 +45,7 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
  * - If today's cheapest blocks are more expensive than tomorrow's cheapest blocks,
  *   skips today and uses 2x the count for tomorrow
  * @param cache - Cached price data as PriceCache object
- * @param count - Number of cheapest blocks to find
+ * @param count - Target number of cheapest blocks to find (may be exceeded when the lowest price tier is larger)
  * @param now - Current timestamp in milliseconds (defaults to Date.now())
  * @returns Array of cheapest price blocks, sorted by time
  */
