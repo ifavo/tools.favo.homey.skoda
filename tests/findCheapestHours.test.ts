@@ -208,6 +208,59 @@ describe('findCheapestBlocks', () => {
       }
     });
 
+    test('includes all blocks that round to the same cheapest cent', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+      // 24 blocks (~6h) that all display as 0.20 €/kWh but differ at sub-cent precision
+      const sameCentPrices = [0.198, 0.201, 0.204];
+      const blocks: PriceBlock[] = [];
+      for (let i = 0; i < 24; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: sameCentPrices[i % sameCentPrices.length] });
+      }
+      // Expensive filler so slice(0, count) would otherwise stop at 8
+      for (let i = 0; i < 8; i++) {
+        const start = now + (60 * 60 * 1000) + ((24 + i) * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.35 });
+      }
+      const cache: PriceCache = blocksToDayBasedCache(blocks);
+      const result = findCheapestBlocks(cache, 8, now);
+
+      expect(result.length).toBe(24);
+      result.forEach((block) => {
+        expect(Math.round(block.price * 100)).toBe(20);
+      });
+      expect(result.every((b) => b.price < 0.35)).toBe(true);
+    });
+
+    test('does not expand next cent when cheapest cent has fewer than count', () => {
+      const now = Date.now();
+      const blockDuration = 15 * 60 * 1000;
+      const blocks: PriceBlock[] = [];
+      // 4 blocks at 19¢ (cheapest cent, below count=8)
+      for (let i = 0; i < 4; i++) {
+        const start = now + (60 * 60 * 1000) + (i * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.194 });
+      }
+      // 12 blocks at 20¢ — must not all be included; only fill to count
+      for (let i = 0; i < 12; i++) {
+        const start = now + (60 * 60 * 1000) + ((4 + i) * blockDuration);
+        const end = start + blockDuration;
+        blocks.push({ start, end, price: 0.201 });
+      }
+      const cache: PriceCache = blocksToDayBasedCache(blocks);
+      const result = findCheapestBlocks(cache, 8, now);
+
+      expect(result.length).toBe(8);
+      const at19 = result.filter((b) => Math.round(b.price * 100) === 19);
+      const at20 = result.filter((b) => Math.round(b.price * 100) === 20);
+      expect(at19.length).toBe(4);
+      expect(at20.length).toBe(4);
+    });
+
     test('decideLowPriceCharging toggles ON for block beyond configured count when at min price', () => {
       const { decideLowPriceCharging } = require('../logic/lowPrice/decideLowPriceCharging');
 

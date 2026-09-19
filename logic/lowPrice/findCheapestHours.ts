@@ -12,10 +12,21 @@ function isBlockOnDay(block: PriceBlock, dayStartUtcMs: number): boolean {
 }
 
 /**
+ * Round €/kWh to whole cents for cheapest-tier comparison.
+ * Hours that display as the same price (e.g. 0.20) are treated as one tier.
+ */
+function priceToCents(price: number): number {
+  return Math.round(price * 100);
+}
+
+/**
  * Sort blocks by price (cheapest first) and return top N.
- * When more blocks share the absolute lowest price than count, returns all blocks at that price.
+ * When more blocks share the cheapest cent-rounded price than count,
+ * returns all blocks at that cent (so a flat cheap day charges all matching hours).
+ * If the cheapest cent has fewer than count blocks, fills remaining slots from
+ * the next cheapest exact prices without expanding the next cent fully.
  * @param blocks - Array of price blocks to sort
- * @param count - Target number of cheapest blocks to return
+ * @param count - Minimum number of cheapest blocks to return
  * @returns Array of cheapest price blocks, sorted by price (ascending)
  */
 function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<PriceBlock> {
@@ -25,11 +36,11 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
     return sorted;
   }
 
-  const minPrice = sorted[0].price;
-  const blocksAtMinPrice = sorted.filter((b) => b.price === minPrice);
+  const minCents = priceToCents(sorted[0].price);
+  const blocksAtMinCents = sorted.filter((b) => priceToCents(b.price) === minCents);
 
-  if (blocksAtMinPrice.length > count) {
-    return blocksAtMinPrice;
+  if (blocksAtMinCents.length > count) {
+    return blocksAtMinCents;
   }
 
   return sorted.slice(0, count);
@@ -45,7 +56,7 @@ function getCheapestBlocks(blocks: Array<PriceBlock>, count: number): Array<Pric
  * - If today's cheapest blocks are more expensive than tomorrow's cheapest blocks,
  *   skips today and uses 2x the count for tomorrow
  * @param cache - Cached price data as PriceCache object
- * @param count - Target number of cheapest blocks to find (may be exceeded when the lowest price tier is larger)
+ * @param count - Minimum number of cheapest blocks to find (may be exceeded when the cheapest cent tier is larger)
  * @param now - Current timestamp in milliseconds (defaults to Date.now())
  * @returns Array of cheapest price blocks, sorted by time
  */

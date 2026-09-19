@@ -207,7 +207,7 @@
           },
           "value": 8,
           "hint": {
-            "en": "Number of cheapest 15-minute blocks per day to charge (default: 8 = 2 hours)"
+            "en": "Minimum number of cheapest 15-minute blocks per day to charge (default: 8 = 2 hours). More blocks are included when additional hours share the same cheapest cent price."
           }
         },
         {
